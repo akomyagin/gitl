@@ -1,0 +1,23 @@
+# Build artifacts
+/gitl
+/dist/
+/bin/
+
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+go.work
+go.work.sum
+
+# Env / secrets
+.env
+*.local.yaml
+
+# IDE
+.idea/
+.vscode/
