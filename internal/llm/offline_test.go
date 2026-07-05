@@ -88,6 +88,19 @@ func TestOfflineContentUseful(t *testing.T) {
 	}
 }
 
+func TestOfflineAlwaysCarriesRisk(t *testing.T) {
+	out, err := NewOffline(sampleCommits(), sampleDiff).Complete(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if !ValidRiskLevel(out.Risk.Level) {
+		t.Errorf("offline must carry a valid risk level, got %q", out.Risk.Level)
+	}
+	if out.Risk.Summary == "" {
+		t.Error("offline risk summary must not be empty")
+	}
+}
+
 func TestOfflineEmptyRange(t *testing.T) {
 	out, err := NewOffline(nil, "").Complete(context.Background(), Request{})
 	if err != nil {

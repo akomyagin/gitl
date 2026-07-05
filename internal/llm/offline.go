@@ -16,8 +16,8 @@ import (
 //
 // It is a genuinely useful fallback (not a "no key" stub): it summarizes commit
 // subjects, lists changed files grouped by status, and reports rough size
-// stats. Structured risk-scoring (low|medium|high) is intentionally not
-// produced here — that lands in Этап 2 (see docs/TECHNICAL_PLAN.md §6).
+// stats. It always carries a structured risk score (low|medium|high) computed
+// by the shared deterministic heuristic (§7.3) — there is no model to ask.
 type Offline struct {
 	commits []gitlog.Commit
 	diff    string
@@ -32,13 +32,18 @@ func NewOffline(commits []gitlog.Commit, diff string) *Offline {
 	return &Offline{commits: commits, diff: diff}
 }
 
-// Complete returns a deterministic Markdown review. The ctx is honored for
-// cancellation; req is unused (offline has no model to prompt).
+// Complete returns a deterministic Markdown review with a heuristic risk score.
+// The ctx is honored for cancellation; the Request's prompt fields are unused
+// (offline has no model to prompt), though its Commits/Diff would be equivalent
+// to the ones NewOffline was built from.
 func (o *Offline) Complete(ctx context.Context, _ Request) (Response, error) {
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
-	return Response{Content: o.render()}, nil
+	return Response{
+		Content: o.render(),
+		Risk:    HeuristicRisk(o.commits, o.diff),
+	}, nil
 }
 
 // render builds the Markdown summary. It is pure and deterministic.
@@ -128,17 +133,7 @@ func (o *Offline) writeDiffStats(b *strings.Builder) {
 	if strings.TrimSpace(o.diff) == "" {
 		return
 	}
-	var added, removed int
-	for _, line := range strings.Split(o.diff, "\n") {
-		switch {
-		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
-			// file headers, not content changes
-		case strings.HasPrefix(line, "+"):
-			added++
-		case strings.HasPrefix(line, "-"):
-			removed++
-		}
-	}
+	added, removed := gitlog.DiffLineStats(o.diff)
 	b.WriteString("## Diff stats\n\n")
 	fmt.Fprintf(b, "- Lines added: %d\n", added)
 	fmt.Fprintf(b, "- Lines removed: %d\n\n", removed)
