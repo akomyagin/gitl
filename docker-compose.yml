@@ -1,0 +1,28 @@
+# docker-compose.yml — ТОЛЬКО dev-зависимость, НЕ часть продукта.
+#
+# gitl — это чистый CLI-инструмент без сервера, поэтому сам gitl НЕ оборачивается
+# в docker-compose и не запускается как контейнер.
+#
+# Единственный сервис ниже — локальный Ollama. Он нужен, чтобы во время разработки
+# проверять мультипровайдерность LLM-клиента (один из трёх поддерживаемых
+# провайдеров: OpenAI-совместимый API, Ollama, Azure OpenAI) без внешних вызовов
+# и без затрат на токены. См. docs/TECHNICAL_PLAN.md §5 (provider: "ollama").
+#
+# Использование:
+#   docker compose up ollama
+#   # затем, например:
+#   docker compose exec ollama ollama pull llama3.2
+#   # gitl настраивается на base_url http://localhost:11434 с provider: "ollama"
+
+services:
+  ollama:
+    image: ollama/ollama
+    container_name: gitl-ollama-dev
+    ports:
+      - "11434:11434"          # стандартный порт Ollama; gitl обращается сюда как provider=ollama
+    volumes:
+      - ollama-models:/root/.ollama   # кэш скачанных моделей между перезапусками
+    restart: unless-stopped
+
+volumes:
+  ollama-models:
