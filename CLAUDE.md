@@ -60,7 +60,8 @@ BYOK + мультипровайдерность, без телеметрии.
 ```bash
 go build ./...                 # сборка (должна быть зелёной с Этапа 0)
 go test ./...                  # тесты
-go run ./cmd/gitl version      # запуск (пока version/usage; команды — с Этапа 1)
+go run ./cmd/gitl review HEAD~5..HEAD   # AI-ревью диапазона (offline без ключа)
+go run ./cmd/gitl version
 go run ./cmd/gitl --help
 
 docker compose up ollama       # локальный Ollama для теста мультипровайдерности (dev-зависимость)
