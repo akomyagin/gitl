@@ -149,3 +149,32 @@ func TestValidateRejectsBadTimeout(t *testing.T) {
 		t.Error("expected error for timeout_seconds = 0")
 	}
 }
+
+// TestValidateRejectsBadFailOn guards against a silent misfire: an unrecognized
+// policy.fail_on value must be a loud config error, not fall through to
+// llm.RiskAtLeast's rank lookup (where an unknown threshold ranks below every
+// real risk level and would fail-gate on every review — the opposite of the
+// project's "default WARN, hard gate is explicit opt-in" principle).
+func TestValidateRejectsBadFailOn(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "policy:\n  fail_on: hgih\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err == nil {
+		t.Error("expected error for policy.fail_on = \"hgih\"")
+	}
+}
+
+// TestValidateNormalizesFailOnCase proves a mixed-case fail_on value (e.g. from
+// a flag or YAML) is accepted and normalized, not rejected.
+func TestValidateNormalizesFailOnCase(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "policy:\n  fail_on: High\n")
+	cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Policy.FailOn != "high" {
+		t.Errorf("fail_on = %q, want normalized \"high\"", cfg.Policy.FailOn)
+	}
+}

@@ -7,10 +7,10 @@
 // An empty api_key selects offline mode (a warning is printed to stderr by the
 // caller — Load does not fail).
 //
-// Fields for the cost:/output:/policy: blocks are defined here for a complete
-// схема (см. docs/TECHNICAL_PLAN.md §5) but are not yet wired into behavior;
-// cost-guard and multi-format output land in Этап 2. Provider branching beyond
-// "openai" and diff truncation driven by these fields are also Этап 2.
+// The cost:/output:/policy:/diff: blocks and provider branching (openai /
+// ollama / azure_openai) are all wired into behavior as of Этап 2 (см.
+// docs/TECHNICAL_PLAN.md §5–§8). digest:/required_changelog_categories remain
+// schema-only until Этап 3.
 package config
 
 import (
@@ -43,6 +43,17 @@ type LLMConfig struct {
 	Temperature    float64 `mapstructure:"temperature"`
 	TimeoutSeconds int     `mapstructure:"timeout_seconds"`
 	MaxRetries     int     `mapstructure:"max_retries"`
+	// AzureOpenAI is required only when Provider == "azure_openai".
+	AzureOpenAI AzureOpenAIConfig `mapstructure:"azure_openai"`
+}
+
+// AzureOpenAIConfig holds the Azure OpenAI endpoint coordinates. The request
+// URL is {endpoint}/openai/deployments/{deployment}/chat/completions?api-version={api_version},
+// with auth via the "api-key" header (not "Authorization: Bearer").
+type AzureOpenAIConfig struct {
+	Endpoint   string `mapstructure:"endpoint"`
+	Deployment string `mapstructure:"deployment"`
+	APIVersion string `mapstructure:"api_version"`
 }
 
 // Timeout returns the per-request LLM timeout as a time.Duration.
@@ -50,29 +61,33 @@ func (c LLMConfig) Timeout() time.Duration {
 	return time.Duration(c.TimeoutSeconds) * time.Second
 }
 
-// CostConfig holds cost-guard thresholds. Not yet wired into behavior — the
-// cost-guard (--dry-run / --max-cost-usd) lands in Этап 2.
+// CostConfig holds cost-guard thresholds and optional pricing overrides. When
+// PricePer1MInput/Output are 0 the built-in pricing table (internal/llm) is used
+// (§8.2). max_cost_usd <= 0 disables the guard entirely (§8.4).
 type CostConfig struct {
-	MaxCostUSD float64 `mapstructure:"max_cost_usd"`
-	WarnAtUSD  float64 `mapstructure:"warn_at_usd"`
+	MaxCostUSD       float64 `mapstructure:"max_cost_usd"`
+	WarnAtUSD        float64 `mapstructure:"warn_at_usd"`
+	PricePer1MInput  float64 `mapstructure:"price_per_1m_input"`
+	PricePer1MOutput float64 `mapstructure:"price_per_1m_output"`
 }
 
-// OutputConfig holds output settings. Only "md" is rendered today; text/json
-// formatting lands in Этап 2.
+// OutputConfig holds output settings. All three formats (md/text/json) are
+// rendered as of Этап 2.
 type OutputConfig struct {
 	Format string `mapstructure:"format"`
 	Color  bool   `mapstructure:"color"`
 }
 
-// DiffConfig bounds the diff sent to the LLM. max_diff_bytes/exclude_globs are
-// defined here but the config-driven truncation strategy lands in Этап 2.
+// DiffConfig bounds the diff sent to the LLM: max_diff_bytes is the truncation
+// limit, exclude_globs skip matching changed files before building the diff.
 type DiffConfig struct {
 	MaxDiffBytes int      `mapstructure:"max_diff_bytes"`
 	ExcludeGlobs []string `mapstructure:"exclude_globs"`
 }
 
-// PolicyConfig is the repo-level governance policy. Defined for a complete
-// schema; CI gating (fail_on) is wired in Этап 2+.
+// PolicyConfig is the repo-level governance policy. fail_on is the CI gating
+// threshold wired into `review` as of Этап 2; required_changelog_categories is
+// used by changelog in Этап 3.
 type PolicyConfig struct {
 	FailOn                      string   `mapstructure:"fail_on"`
 	RequiredChangelogCategories []string `mapstructure:"required_changelog_categories"`
@@ -96,21 +111,23 @@ type Options struct {
 // layer beneath the personal file, repo file, env, and flags.
 func defaults() map[string]any {
 	return map[string]any{
-		"llm.provider":        "openai",
-		"llm.api_key":         "",
-		"llm.base_url":        "https://api.openai.com/v1",
-		"llm.model":           "gpt-4o-mini",
-		"llm.max_tokens":      1500,
-		"llm.temperature":     0.2,
-		"llm.timeout_seconds": 60,
-		"llm.max_retries":     3,
-		"cost.max_cost_usd":   0.50,
-		"cost.warn_at_usd":    0.10,
-		"output.format":       "md",
-		"output.color":        true,
-		"diff.max_diff_bytes": 120000,
-		"diff.exclude_globs":  []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},
-		"policy.fail_on":      "never",
+		"llm.provider":             "openai",
+		"llm.api_key":              "",
+		"llm.base_url":             "https://api.openai.com/v1",
+		"llm.model":                "gpt-4o-mini",
+		"llm.max_tokens":           1500,
+		"llm.temperature":          0.2,
+		"llm.timeout_seconds":      60,
+		"llm.max_retries":          3,
+		"cost.max_cost_usd":        0.50,
+		"cost.warn_at_usd":         0.10,
+		"cost.price_per_1m_input":  0.0,
+		"cost.price_per_1m_output": 0.0,
+		"output.format":            "md",
+		"output.color":             true,
+		"diff.max_diff_bytes":      120000,
+		"diff.exclude_globs":       []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},
+		"policy.fail_on":           "never",
 	}
 }
 
@@ -213,9 +230,12 @@ func mergeFile(v *viper.Viper, path string) error {
 func bindChangedFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 	// flagToKey maps a pflag name to its dotted config key.
 	flagToKey := map[string]string{
-		"provider": "llm.provider",
-		"model":    "llm.model",
-		"base-url": "llm.base_url",
+		"provider":     "llm.provider",
+		"model":        "llm.model",
+		"base-url":     "llm.base_url",
+		"format":       "output.format",
+		"fail-on":      "policy.fail_on",
+		"max-cost-usd": "cost.max_cost_usd",
 	}
 	var bindErr error
 	flags.Visit(func(f *pflag.Flag) {
@@ -230,7 +250,18 @@ func bindChangedFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 	return bindErr
 }
 
-// validate checks invariants that must hold before the config is used.
+// validFailOnLevels are the only accepted policy.fail_on / --fail-on values.
+// A typo here must be a loud config error, not a silent misfire: an unknown
+// string falls through llm.RiskAtLeast's rank lookup as 0, which is BELOW
+// every real risk level, making "l >= t" true for any risk — i.e. an
+// unrecognized threshold would otherwise fail-gate on every review, the exact
+// opposite of the project's "default WARN, hard gate is explicit opt-in"
+// principle (§9).
+var validFailOnLevels = map[string]bool{"never": true, "low": true, "medium": true, "high": true}
+
+// validate checks invariants that must hold before the config is used. It also
+// normalizes policy.fail_on to lowercase so downstream comparisons don't need
+// to re-normalize.
 func (c *Config) validate() error {
 	if c.LLM.TimeoutSeconds <= 0 {
 		return fmt.Errorf("llm.timeout_seconds must be > 0, got %d", c.LLM.TimeoutSeconds)
@@ -238,6 +269,14 @@ func (c *Config) validate() error {
 	if c.LLM.MaxTokens <= 0 {
 		return fmt.Errorf("llm.max_tokens must be > 0, got %d", c.LLM.MaxTokens)
 	}
+	failOn := strings.ToLower(strings.TrimSpace(c.Policy.FailOn))
+	if failOn == "" {
+		failOn = "never"
+	}
+	if !validFailOnLevels[failOn] {
+		return fmt.Errorf("policy.fail_on must be one of never|low|medium|high, got %q", c.Policy.FailOn)
+	}
+	c.Policy.FailOn = failOn
 	return nil
 }
 
