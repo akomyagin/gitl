@@ -1,10 +1,248 @@
 // Package config loads and validates gitl configuration.
 //
-// Планируемая модель (реализация — Этап 1+, см. docs/TECHNICAL_PLAN.md §5):
-// два уровня конфига, сливаемых по приоритету
-// флаг > env > .gitl.yaml (репо) > ~/.config/gitl/config.yaml (личный),
-// через viper → struct Config. Пути — через os.UserConfigDir(), не хардкод.
-// Пустой api_key → offline-режим с предупреждением в stderr (не падаем).
+// Two config levels are merged by priority
+// flag > env > .gitl.yaml (repo, cwd) > ~/.config/gitl/config.yaml (personal),
+// via a per-call viper instance → struct Config. The personal path comes from
+// os.UserConfigDir() (never a hardcoded ~/.config; on Windows → %AppData%\gitl).
+// An empty api_key selects offline mode (a warning is printed to stderr by the
+// caller — Load does not fail).
+//
+// Fields for the cost:/output:/policy: blocks are defined here for a complete
+// схема (см. docs/TECHNICAL_PLAN.md §5) but are not yet wired into behavior;
+// cost-guard and multi-format output land in Этап 2. Provider branching beyond
+// "openai" and diff truncation driven by these fields are also Этап 2.
 package config
 
-// Заглушка Этапа 0: типы и Load() появятся в Этапе 1+.
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+)
+
+// Config is the fully merged, validated configuration for one gitl invocation.
+type Config struct {
+	LLM    LLMConfig    `mapstructure:"llm"`
+	Cost   CostConfig   `mapstructure:"cost"`
+	Output OutputConfig `mapstructure:"output"`
+	Diff   DiffConfig   `mapstructure:"diff"`
+	Policy PolicyConfig `mapstructure:"policy"`
+}
+
+// LLMConfig configures the LLM provider and request parameters.
+type LLMConfig struct {
+	Provider       string  `mapstructure:"provider"`
+	APIKey         string  `mapstructure:"api_key"`
+	BaseURL        string  `mapstructure:"base_url"`
+	Model          string  `mapstructure:"model"`
+	MaxTokens      int     `mapstructure:"max_tokens"`
+	Temperature    float64 `mapstructure:"temperature"`
+	TimeoutSeconds int     `mapstructure:"timeout_seconds"`
+	MaxRetries     int     `mapstructure:"max_retries"`
+}
+
+// Timeout returns the per-request LLM timeout as a time.Duration.
+func (c LLMConfig) Timeout() time.Duration {
+	return time.Duration(c.TimeoutSeconds) * time.Second
+}
+
+// CostConfig holds cost-guard thresholds. Not yet wired into behavior — the
+// cost-guard (--dry-run / --max-cost-usd) lands in Этап 2.
+type CostConfig struct {
+	MaxCostUSD float64 `mapstructure:"max_cost_usd"`
+	WarnAtUSD  float64 `mapstructure:"warn_at_usd"`
+}
+
+// OutputConfig holds output settings. Only "md" is rendered today; text/json
+// formatting lands in Этап 2.
+type OutputConfig struct {
+	Format string `mapstructure:"format"`
+	Color  bool   `mapstructure:"color"`
+}
+
+// DiffConfig bounds the diff sent to the LLM. max_diff_bytes/exclude_globs are
+// defined here but the config-driven truncation strategy lands in Этап 2.
+type DiffConfig struct {
+	MaxDiffBytes int      `mapstructure:"max_diff_bytes"`
+	ExcludeGlobs []string `mapstructure:"exclude_globs"`
+}
+
+// PolicyConfig is the repo-level governance policy. Defined for a complete
+// schema; CI gating (fail_on) is wired in Этап 2+.
+type PolicyConfig struct {
+	FailOn                      string   `mapstructure:"fail_on"`
+	RequiredChangelogCategories []string `mapstructure:"required_changelog_categories"`
+	ExcludeGlobs                []string `mapstructure:"exclude_globs"`
+}
+
+// Options controls how Load discovers config files.
+type Options struct {
+	// RepoDir is the directory searched for the repo-level ".gitl.yaml".
+	// Empty means the current working directory.
+	RepoDir string
+	// PersonalPath overrides the personal config file path. Empty means
+	// "<os.UserConfigDir()>/gitl/config.yaml".
+	PersonalPath string
+	// Flags, when non-nil, are bound so that explicitly-set flags win over
+	// env and files. Only flags present in the set are considered.
+	Flags *pflag.FlagSet
+}
+
+// defaults returns the built-in configuration, used as the lowest-priority
+// layer beneath the personal file, repo file, env, and flags.
+func defaults() map[string]any {
+	return map[string]any{
+		"llm.provider":        "openai",
+		"llm.api_key":         "",
+		"llm.base_url":        "https://api.openai.com/v1",
+		"llm.model":           "gpt-4o-mini",
+		"llm.max_tokens":      1500,
+		"llm.temperature":     0.2,
+		"llm.timeout_seconds": 60,
+		"llm.max_retries":     3,
+		"cost.max_cost_usd":   0.50,
+		"cost.warn_at_usd":    0.10,
+		"output.format":       "md",
+		"output.color":        true,
+		"diff.max_diff_bytes": 120000,
+		"diff.exclude_globs":  []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},
+		"policy.fail_on":      "never",
+	}
+}
+
+// PersonalConfigPath returns the default personal config file path, derived
+// from os.UserConfigDir() so it is correct across platforms.
+func PersonalConfigPath() (string, error) {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve user config dir: %w", err)
+	}
+	return filepath.Join(dir, "gitl", "config.yaml"), nil
+}
+
+// Load builds the merged configuration for one invocation.
+//
+// Priority (lowest → highest): built-in defaults → personal config file →
+// repo-level .gitl.yaml → environment (GITL_* / GITL_API_KEY) → flags. A
+// fresh viper instance is used per call so tests never share global state.
+//
+// Missing config files are not an error — the file layers are simply skipped.
+func Load(opts Options) (*Config, error) {
+	v := viper.NewWithOptions(viper.KeyDelimiter("."))
+	v.SetConfigType("yaml")
+
+	for key, val := range defaults() {
+		v.SetDefault(key, val)
+	}
+
+	// Environment: GITL_LLM_PROVIDER, GITL_DIFF_MAX_DIFF_BYTES, etc.
+	v.SetEnvPrefix("GITL")
+	v.AutomaticEnv()
+	// Map dotted config keys to GITL_* env var names:
+	// "llm.max_tokens" → "GITL_LLM_MAX_TOKENS".
+	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
+	// Documented special case: the API key env var is GITL_API_KEY, not
+	// GITL_LLM_API_KEY. Bind it explicitly so the short, documented name wins.
+	if err := v.BindEnv("llm.api_key", "GITL_API_KEY"); err != nil {
+		return nil, fmt.Errorf("bind GITL_API_KEY: %w", err)
+	}
+
+	// Personal config (lower priority than repo config).
+	personalPath := opts.PersonalPath
+	if personalPath == "" {
+		p, err := PersonalConfigPath()
+		if err != nil {
+			return nil, err
+		}
+		personalPath = p
+	}
+	if err := mergeFile(v, personalPath); err != nil {
+		return nil, err
+	}
+
+	// Repo-level .gitl.yaml (higher priority than personal — merged last).
+	repoDir := opts.RepoDir
+	if repoDir == "" {
+		repoDir = "."
+	}
+	if err := mergeFile(v, filepath.Join(repoDir, ".gitl.yaml")); err != nil {
+		return nil, err
+	}
+
+	// Flags win over everything, but only when explicitly set by the user.
+	if opts.Flags != nil {
+		if err := bindChangedFlags(v, opts.Flags); err != nil {
+			return nil, err
+		}
+	}
+
+	var cfg Config
+	if err := v.Unmarshal(&cfg); err != nil {
+		return nil, fmt.Errorf("unmarshal config: %w", err)
+	}
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	return &cfg, nil
+}
+
+// mergeFile merges a YAML file into v if it exists. A missing file is not an
+// error; other read/parse errors are.
+func mergeFile(v *viper.Viper, path string) error {
+	f, err := os.Open(path) //nolint:gosec // path is derived from config discovery, not user input
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("open config %q: %w", path, err)
+	}
+	defer f.Close()
+
+	if err := v.MergeConfig(f); err != nil {
+		return fmt.Errorf("parse config %q: %w", path, err)
+	}
+	return nil
+}
+
+// bindChangedFlags maps known flag names onto config keys, but only for flags
+// the user actually set, so unset flag defaults never clobber file/env values.
+func bindChangedFlags(v *viper.Viper, flags *pflag.FlagSet) error {
+	// flagToKey maps a pflag name to its dotted config key.
+	flagToKey := map[string]string{
+		"provider": "llm.provider",
+		"model":    "llm.model",
+		"base-url": "llm.base_url",
+	}
+	var bindErr error
+	flags.Visit(func(f *pflag.Flag) {
+		key, ok := flagToKey[f.Name]
+		if !ok {
+			return
+		}
+		if err := v.BindPFlag(key, f); err != nil && bindErr == nil {
+			bindErr = fmt.Errorf("bind flag %q: %w", f.Name, err)
+		}
+	})
+	return bindErr
+}
+
+// validate checks invariants that must hold before the config is used.
+func (c *Config) validate() error {
+	if c.LLM.TimeoutSeconds <= 0 {
+		return fmt.Errorf("llm.timeout_seconds must be > 0, got %d", c.LLM.TimeoutSeconds)
+	}
+	if c.LLM.MaxTokens <= 0 {
+		return fmt.Errorf("llm.max_tokens must be > 0, got %d", c.LLM.MaxTokens)
+	}
+	return nil
+}
+
+// OfflineMode reports whether gitl should use the deterministic offline
+// provider instead of the network client (i.e. no API key is configured).
+func (c *Config) OfflineMode() bool {
+	return c.LLM.APIKey == ""
+}
