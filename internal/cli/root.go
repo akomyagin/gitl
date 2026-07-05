@@ -1,52 +1,84 @@
-// Package cli wires up the gitl command tree.
+// Package cli wires up the gitl command tree (cobra) and shared scaffolding:
+// persistent flags, viper-backed config loading, and slog setup.
 //
-// Этап 0 (bootstrap): only a placeholder Execute that prints usage/version so
-// that `go build ./...` and a basic `go run ./cmd/gitl` work. The real cobra
-// command tree (root + review/changelog/digest/version, viper config wiring,
-// global flags, slog) is implemented in Этап 1+ — see docs/TECHNICAL_PLAN.md §6.
+// One file per command: root.go (this scaffold), version.go, review.go.
+// changelog.go and digest.go are Этап 3 — not created yet
+// (see docs/TECHNICAL_PLAN.md §6).
 package cli
 
 import (
+	"context"
 	"fmt"
+	"log/slog"
 	"os"
+
+	"github.com/spf13/cobra"
+
+	"github.com/akomyagin/gitl/internal/config"
 )
 
-// Build-provenance values, injected via -ldflags at release time (Этап 5).
-// Defaults are used for local/dev builds.
-var (
-	version = "0.0.0-dev"
-	commit  = "none"
-	date    = "unknown"
-)
+// globalFlags holds values for root-level persistent flags shared by all
+// subcommands. It is populated by cobra flag parsing before RunE fires.
+type globalFlags struct {
+	verbose    bool
+	configPath string // override for the personal config file path
+}
 
-const usage = `gitl — AI reviewer of git history (git-log-lens)
+// newRootCmd builds the root command and attaches subcommands. gf is created
+// here and captured by the subcommand closures, so callers only need the
+// resulting *cobra.Command.
+func newRootCmd() *cobra.Command {
+	gf := &globalFlags{}
 
-Usage:
-  gitl <command> [flags]
-
-Commands (implemented from Этап 1+):
-  review <range>     AI review of a commit range with machine-readable risk score
-  changelog          Keep a Changelog-style changelog from history
-  digest             activity digest (multi-repo capable)
-  version            print version and build provenance
-
-This is the Этап 0 bootstrap skeleton. See docs/PLAN.md for the roadmap.
-`
-
-// Execute is the entrypoint used by cmd/gitl. In Этап 0 it only handles
-// `version`, `-h`/`--help`, and prints usage otherwise. It returns a non-nil
-// error to signal a non-zero exit code.
-func Execute(args []string) error {
-	if len(args) > 0 {
-		switch args[0] {
-		case "version":
-			fmt.Printf("gitl %s (commit %s, built %s)\n", version, commit, date)
-			return nil
-		case "-h", "--help", "help":
-			fmt.Print(usage)
-			return nil
-		}
+	root := &cobra.Command{
+		Use:           "gitl",
+		Short:         "AI reviewer of git history (git-log-lens)",
+		Long:          "gitl AI-reviews a git commit range (`gitl review <range>`) with an LLM.\n\nWithout an API key it falls back to a deterministic offline review. changelog/digest and risk-scoring land in later stages.",
+		SilenceUsage:  true,
+		SilenceErrors: true,
+		PersistentPreRun: func(_ *cobra.Command, _ []string) {
+			setupLogging(gf.verbose)
+		},
 	}
-	fmt.Fprint(os.Stdout, usage)
+
+	root.PersistentFlags().BoolVarP(&gf.verbose, "verbose", "v", false, "enable debug logging")
+	root.PersistentFlags().StringVar(&gf.configPath, "config", "", "path to personal config file (overrides ~/.config/gitl/config.yaml)")
+
+	root.AddCommand(newVersionCmd())
+	root.AddCommand(newReviewCmd(gf))
+
+	return root
+}
+
+// Execute runs the gitl command tree with the given context and args. It
+// returns a non-nil error to signal a non-zero exit code; the error is printed
+// to stderr here so main stays thin.
+func Execute(ctx context.Context, args []string) error {
+	root := newRootCmd()
+	root.SetArgs(args)
+	if err := root.ExecuteContext(ctx); err != nil {
+		fmt.Fprintln(os.Stderr, "gitl:", err)
+		return err
+	}
 	return nil
+}
+
+// setupLogging configures the default slog logger. --verbose raises the level
+// to debug; otherwise warnings and above go to stderr.
+func setupLogging(verbose bool) {
+	level := slog.LevelWarn
+	if verbose {
+		level = slog.LevelDebug
+	}
+	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	slog.SetDefault(slog.New(handler))
+}
+
+// loadConfig loads the merged config for a command, honoring the --config
+// override and binding the command's flags for flag-level priority.
+func loadConfig(cmd *cobra.Command, gf *globalFlags) (*config.Config, error) {
+	return config.Load(config.Options{
+		PersonalPath: gf.configPath,
+		Flags:        cmd.Flags(),
+	})
 }
