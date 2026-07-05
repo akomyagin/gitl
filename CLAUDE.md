@@ -60,7 +60,8 @@ BYOK + мультипровайдерность, без телеметрии.
 ```bash
 go build ./...                 # сборка (должна быть зелёной с Этапа 0)
 go test ./...                  # тесты
-go run ./cmd/gitl review HEAD~5..HEAD   # AI-ревью диапазона (offline без ключа)
+go run ./cmd/gitl review HEAD~5..HEAD              # AI-ревью диапазона (offline без ключа)
+go run ./cmd/gitl review HEAD~5..HEAD --format=json --fail-on=high
 go run ./cmd/gitl version
 go run ./cmd/gitl --help
 
