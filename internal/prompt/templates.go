@@ -1,9 +1,9 @@
 // Package prompt builds LLM prompts from git history.
 //
-// Этап 1 ships a single hardcoded review template as plain Go strings — one
+// It ships a single hardcoded review template as plain Go strings — one
 // template does not justify //go:embed or text/template machinery. Custom
-// user templates (text/template) are post-MVP; the risk-scoring instructions
-// in the prompt land in Этап 2 together with response parsing.
+// user templates (text/template) are post-MVP. The template requires the model
+// to end with a fenced `risk` JSON block (§7.1), parsed back in internal/llm.
 package prompt
 
 import (
@@ -20,15 +20,21 @@ type Review struct {
 	Diff    string
 }
 
-// reviewSystem is the hardcoded system prompt for `gitl review`.
-const reviewSystem = `You are an experienced senior software engineer performing a code review of a git commit range.
-
-Write a concise, structured review in Markdown with these sections:
-1. "## Summary" — what this range does overall, 2-4 sentences.
-2. "## Notable changes" — bullet list of the most important changes.
-3. "## Concerns" — potential bugs, design issues, missing tests, security-sensitive spots. Be specific: reference files and hunks. If there are none, say so explicitly.
-
-Ground every statement in the commits and diff you are given. Ignore pure formatting churn (whitespace, generated/lock files). Do not invent changes that are not in the diff.`
+// reviewSystem is the hardcoded system prompt for `gitl review`. The trailing
+// risk block (item 4) is the machine-readable score parsed by internal/llm
+// (§7.1); it must be the very last thing the model emits.
+const reviewSystem = "You are an experienced senior software engineer performing a code review of a git commit range.\n" +
+	"\n" +
+	"Write a concise, structured review in Markdown with these sections:\n" +
+	"1. \"## Summary\" — what this range does overall, 2-4 sentences.\n" +
+	"2. \"## Notable changes\" — bullet list of the most important changes.\n" +
+	"3. \"## Concerns\" — potential bugs, design issues, missing tests, security-sensitive spots. Be specific: reference files and hunks. If there are none, say so explicitly.\n" +
+	"4. End your answer with a separate fenced code block using the language `risk`, containing exactly one single-line JSON object, and this must be the very last thing you output:\n" +
+	"   ```risk\n" +
+	"   {\"level\": \"low|medium|high\", \"summary\": \"<one sentence, up to 140 characters>\"}\n" +
+	"   ```\n" +
+	"\n" +
+	"Ground every statement in the commits and diff you are given. Ignore pure formatting churn (whitespace, generated/lock files). Do not invent changes that are not in the diff."
 
 // BuildReview renders the system and user messages for a review. The user
 // message carries the commit metadata (subjects, authors, bodies, file lists)
