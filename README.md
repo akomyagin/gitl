@@ -12,8 +12,10 @@
 **BYOK** (bring your own key) и мультипровайдерность: OpenAI-совместимый API,
 Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии.
 
-> Статус: **Этап 0 — bootstrap**. Каркас и документация готовы; реализация команд
-> начинается с Этапа 1. Подробности — в [`docs/PLAN.md`](docs/PLAN.md).
+> Статус: **Этап 1 — validation spike + каркас CLI**. `gitl review <range>`
+> работает end-to-end (offline-провайдер по умолчанию, OpenAI-совместимый API
+> при наличии ключа); `changelog`/`digest`, риск-скоринг, retry и
+> мультипровайдерность — с Этапа 2. Подробности — в [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Быстрый старт
 
@@ -23,7 +25,12 @@ Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии
 # собрать
 go build ./...
 
-# запустить (пока печатает version/usage — реализация команд с Этапа 1)
+# AI-ревью диапазона коммитов (без ключа — детерминированный offline-обзор)
+go run ./cmd/gitl review HEAD~5..HEAD
+
+# с ключом — реальный обзор через OpenAI-совместимый API
+GITL_API_KEY=sk-... go run ./cmd/gitl review HEAD~5..HEAD
+
 go run ./cmd/gitl version
 go run ./cmd/gitl --help
 
