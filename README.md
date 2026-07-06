@@ -5,20 +5,21 @@
 
 - **`gitl review <range>`** — AI-ревью диапазона/PR с машиночитаемым риск-скорингом
   (`low|medium|high`) для гейтинга в CI (`--fail-on=high` → ненулевой exit code);
-- **`gitl changelog --since=<ref>`** — changelog в стиле Keep a Changelog;
-- **`gitl digest --days=N`** — сводка активности, в т.ч. по **нескольким репозиториям**.
+- **`gitl changelog [<range>]`** — changelog в стиле Keep a Changelog, группировка
+  по conventional-commits (по умолчанию — диапазон от последнего тега до `HEAD`);
+- **`gitl digest [--days=N] [--repos=a,b,c]`** — сводка активности по авторам/темам/
+  файлам, в т.ч. по **нескольким репозиториям параллельно**.
 
 Чистый CLI-бинарник плюс GitHub Action-обёртка — без сервера, БД и хостинга ключей.
 **BYOK** (bring your own key) и мультипровайдерность: OpenAI-совместимый API,
 Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии.
 
-> Статус: **Этап 2 — LLM-клиент + мультипровайдерность + риск-скоринг +
-> cost-guard**. `gitl review <range>` даёт структурированный риск-скоринг
-> (`low|medium|high`, с fallback-эвристикой), три формата вывода
-> (`md|text|json`, версионированный JSON-контракт), retry с backoff для сети,
-> реально работает с OpenAI-совместимым API/Ollama/Azure OpenAI, и
-> `--dry-run`/`--max-cost-usd` для контроля расходов. `changelog`/`digest` —
-> с Этапа 3. Подробности — в [`docs/PLAN.md`](docs/PLAN.md).
+> Статус: **Этап 3 — полный набор команд + мульти-репо digest**. Все три команды
+> (`review`/`changelog`/`digest`) работают на реальных репозиториях, все три
+> формата вывода (`md|text|json`); `changelog`/`digest` полностью детерминированы
+> (без LLM), `digest --repos=...` собирает несколько репозиториев параллельно
+> и корректно деградирует, если один из них недоступен. GitHub Action и релизный
+> инжиниринг — с Этапа 4. Подробности — в [`docs/PLAN.md`](docs/PLAN.md).
 
 ## Быстрый старт
 
@@ -40,6 +41,17 @@ go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # ненулевой exit
 
 # оценка стоимости без реального вызова API
 go run ./cmd/gitl review HEAD~5..HEAD --dry-run
+
+# changelog с последнего тега (или вся история, если тегов нет) — без LLM
+go run ./cmd/gitl changelog
+go run ./cmd/gitl changelog v1.2.0..HEAD --format=json
+
+# сводка активности за последние N дней — без LLM
+go run ./cmd/gitl digest --days=14
+
+# мульти-репо digest: собирается параллельно, один недоступный репозиторий
+# не валит остальные
+go run ./cmd/gitl digest --repos=../service-a,../service-b --format=json
 
 go run ./cmd/gitl version
 go run ./cmd/gitl --help
