@@ -14,11 +14,10 @@
 **BYOK** (bring your own key) и мультипровайдерность: OpenAI-совместимый API,
 Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии.
 
-> Статус: **Этап 4 — GitHub Action**. Все три команды (`review`/`changelog`/
-> `digest`) работают на реальных репозиториях, все три формата вывода
-> (`md|text|json`); ниже — готовый Action, оставляющий AI-ревью комментарием
-> к PR и гейтящий по риск-скорингу. Подписанные релизы и публикация
-> в Marketplace — с Этапа 5. Подробности — в [`docs/PLAN.md`](docs/PLAN.md).
+> Статус: все три команды (`review`/`changelog`/`digest`) работают на реальных
+> репозиториях, все три формата вывода (`md|text|json`); ниже — готовый Action,
+> оставляющий AI-ревью комментарием к PR и гейтящий по риск-скорингу.
+> Подписанные релизы и публикация в Marketplace — впереди.
 
 ## Быстрый старт
 
@@ -80,8 +79,7 @@ docker compose up ollama
 **флаг > env > `.gitl.yaml` (репо) > `~/.config/gitl/config.yaml` (личный)**.
 Repo-level `.gitl.yaml` коммитится в репозиторий как общая политика команды
 (порог риска, исключённые пути, категории changelog). Без ключа `gitl` работает
-в детерминированном offline-режиме. Полная схема — в
-[`docs/TECHNICAL_PLAN.md`](docs/TECHNICAL_PLAN.md) §5.
+в детерминированном offline-режиме.
 
 ### Провайдеры (`llm.provider`)
 
@@ -114,9 +112,7 @@ llm:
 
 `gitl` можно подключить как GitHub Action: он AI-ревьюит коммиты пул-реквеста
 и оставляет комментарий с риск-скорингом, опционально блокируя мерж по порогу
-риска. Action собирает `gitl` из исходников (`go install` на пиннутой версии) —
-подробности архитектуры и решения см. в
-[`docs/TECHNICAL_PLAN.md`](docs/TECHNICAL_PLAN.md) §12.
+риска. Action собирает `gitl` из исходников (`go install` на пиннутой версии).
 
 Добавьте в свой репозиторий `.github/workflows/gitl-review.yml`:
 
@@ -168,14 +164,6 @@ jobs:
 - **Маскировка секретов.** GitHub автоматически маскирует значения
   `secrets.*` в логах runner'а как `***`, но это не повод печатать ключ
   в собственных шагах workflow.
-
-## Документация
-
-- [`docs/PLAN.md`](docs/PLAN.md) — видение, этапы, что за пределами MVP.
-- [`docs/TECHNICAL_PLAN.md`](docs/TECHNICAL_PLAN.md) — стек, архитектура,
-  детальная разбивка по этапам, риски.
-- [`docs/POST_MVP_PLAN.md`](docs/POST_MVP_PLAN.md) — nice-to-have, монетизация,
-  Excluded-Never.
 
 ## Лицензия
 
