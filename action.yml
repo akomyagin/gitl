@@ -15,10 +15,11 @@ inputs:
     default: ""
   github-token:
     description: >-
-      Token used to post the PR comment via `gh pr comment`. Defaults to the
-      workflow's GITHUB_TOKEN. The workflow must grant it `pull-requests: write`.
+      Token used to post the PR comment via `gh pr comment`. If left empty,
+      falls back to the calling workflow's GITHUB_TOKEN at run time. The
+      workflow must grant it `pull-requests: write`.
     required: false
-    default: ${{ github.token }}
+    default: ""
   fail-on:
     description: >-
       Risk threshold that fails the check (never|low|medium|high). Default is
@@ -35,23 +36,30 @@ inputs:
   gitl-version:
     description: >-
       Git ref of akomyagin/gitl to build with `go install` (tag/branch/SHA).
-      Defaults to the CLI version that ships with THIS action release — override
-      only for testing (e.g. this repo's own action-selftest.yml pins it to
-      ${{ github.sha }} to exercise the in-progress commit before a tag exists).
+      Defaults to the CLI version that ships with THIS action release —
+      override only for testing (e.g. this repo's own action-selftest.yml
+      pins it to the commit SHA under test, to exercise in-progress code
+      before a tag exists).
     required: false
     default: "v0.1.0"
   base-sha:
-    description: "Base SHA of the range to review. Defaults to the pull_request event's base SHA."
+    description: >-
+      Base SHA of the range to review. If left empty, falls back to the
+      triggering pull_request event's base SHA at run time.
     required: false
-    default: ${{ github.event.pull_request.base.sha }}
+    default: ""
   head-sha:
-    description: "Head SHA of the range to review. Defaults to the pull_request event's head SHA."
+    description: >-
+      Head SHA of the range to review. If left empty, falls back to the
+      triggering pull_request event's head SHA at run time.
     required: false
-    default: ${{ github.event.pull_request.head.sha }}
+    default: ""
   pr-number:
-    description: "Pull request number to comment on. Defaults to the pull_request event's number."
+    description: >-
+      Pull request number to comment on. If left empty, falls back to the
+      triggering pull_request event's number at run time.
     required: false
-    default: ${{ github.event.pull_request.number }}
+    default: ""
 
 runs:
   using: "composite"
@@ -73,14 +81,24 @@ runs:
         # run: script and never echoed (docs/TECHNICAL_PLAN.md §12.5). This
         # step also does not `set -x`, so GH Actions' log masking of secrets.*
         # values is never defeated by us printing the command line.
-        GH_TOKEN: ${{ inputs.github-token }}
+        #
+        # github.* context is NOT allowed inside inputs.*.default (only
+        # discovered when this action actually ran on GitHub — the composite
+        # action manifest's top-level inputs: schema is evaluated before any
+        # context is in scope), so inputs default to "" there and the
+        # fallback to the pull_request event happens here instead, where
+        # github.* is legitimately available.
+        GH_TOKEN: ${{ inputs.github-token || github.token }}
         GITL_API_KEY: ${{ inputs.gitl-api-key }}
-        GITL_RANGE: ${{ inputs.base-sha }}..${{ inputs.head-sha }}
+        GITL_BASE_SHA: ${{ inputs.base-sha || github.event.pull_request.base.sha }}
+        GITL_HEAD_SHA: ${{ inputs.head-sha || github.event.pull_request.head.sha }}
         GITL_FAIL_ON: ${{ inputs.fail-on }}
         GITL_MAX_COST_USD: ${{ inputs.max-cost-usd }}
-        GITL_PR_NUMBER: ${{ inputs.pr-number }}
+        GITL_PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
       run: |
         set -euo pipefail
+
+        GITL_RANGE="${GITL_BASE_SHA}..${GITL_HEAD_SHA}"
 
         # Single gitl invocation (one LLM call at most, §12.3): --format=json
         # carries both the review body (review_markdown) and the machine
