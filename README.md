@@ -1,107 +1,106 @@
 # gitl
 
-**AI-ревьюер git-истории для CLI и CI.** `gitl` (git-log-lens) читает git-историю
-репозитория и через LLM превращает её в структурированный инженерный артефакт:
+[![Action self-test](https://github.com/akomyagin/gitl/actions/workflows/action-selftest.yml/badge.svg)](https://github.com/akomyagin/gitl/actions/workflows/action-selftest.yml)
 
-- **`gitl review <range>`** — AI-ревью диапазона/PR с машиночитаемым риск-скорингом
-  (`low|medium|high`) для гейтинга в CI (`--fail-on=high` → ненулевой exit code);
-- **`gitl changelog [<range>]`** — changelog в стиле Keep a Changelog, группировка
-  по conventional-commits (по умолчанию — диапазон от последнего тега до `HEAD`);
-- **`gitl digest [--days=N] [--repos=a,b,c]`** — сводка активности по авторам/темам/
-  файлам, в т.ч. по **нескольким репозиториям параллельно**.
+**AI-powered git history reviewer for CLI and CI.** `gitl` (git-log-lens) reads a
+repository's git history and turns it into a structured engineering artifact via LLM:
 
-Чистый CLI-бинарник плюс GitHub Action-обёртка — без сервера, БД и хостинга ключей.
-**BYOK** (bring your own key) и мультипровайдерность: OpenAI-совместимый API,
-Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии.
+- **`gitl review <range>`** — AI review of a commit range / PR with machine-readable
+  risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → non-zero exit code);
+- **`gitl changelog [<range>]`** — Keep a Changelog-style changelog, grouped by
+  conventional commits (defaults to last tag → `HEAD`);
+- **`gitl digest [--days=N] [--repos=a,b,c]`** — activity summary by author/topic/file,
+  including **multiple repositories in parallel**.
 
-> Статус: все три команды (`review`/`changelog`/`digest`) работают на реальных
-> репозиториях, все три формата вывода (`md|text|json`); ниже — готовый Action,
-> оставляющий AI-ревью комментарием к PR и гейтящий по риск-скорингу.
-> Подписанные релизы и публикация в Marketplace — впереди.
+A clean CLI binary plus a GitHub Action wrapper — no server, no database, no hosted key
+storage. **BYOK** (bring your own key) with multi-provider support: OpenAI-compatible API,
+Ollama (local/self-hosted), Azure OpenAI. No telemetry.
 
-## Быстрый старт
+> **Status:** all three commands (`review`/`changelog`/`digest`) work on real repositories
+> with all three output formats (`md|text|json`). The Action posts AI reviews as PR comments
+> and gates on risk score. Signed releases and Marketplace listing are coming next.
 
-Требуется **Go 1.22+** и системный **git** в `PATH`.
+## Quick start
+
+Requires **Go 1.22+** and **git** in `PATH`.
 
 ```bash
-# собрать
+# build
 go build ./...
 
-# AI-ревью диапазона коммитов (без ключа — детерминированный offline-обзор)
+# AI review of a commit range (no key = deterministic offline review)
 go run ./cmd/gitl review HEAD~5..HEAD
 
-# с ключом — реальный обзор через OpenAI-совместимый API, с риск-скорингом
+# with a key — real review via OpenAI-compatible API with risk scoring
 GITL_API_KEY=sk-... go run ./cmd/gitl review HEAD~5..HEAD
 
-# машиночитаемый вывод для CI + гейтинг по риску
+# machine-readable output for CI + risk gating
 go run ./cmd/gitl review HEAD~5..HEAD --format=json
-go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # ненулевой exit при высоком риске
+go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # non-zero exit on high risk
 
-# оценка стоимости без реального вызова API
+# estimate cost without making an API call
 go run ./cmd/gitl review HEAD~5..HEAD --dry-run
 
-# changelog с последнего тега (или вся история, если тегов нет) — без LLM
+# changelog from last tag (or full history if no tags) — no LLM
 go run ./cmd/gitl changelog
 go run ./cmd/gitl changelog v1.2.0..HEAD --format=json
 
-# сводка активности за последние N дней — без LLM
+# activity summary for the last N days — no LLM
 go run ./cmd/gitl digest --days=14
 
-# мульти-репо digest: собирается параллельно, один недоступный репозиторий
-# не валит остальные
+# multi-repo digest: runs in parallel; one unreachable repo does not fail the rest
 go run ./cmd/gitl digest --repos=../service-a,../service-b --format=json
 
 go run ./cmd/gitl version
 go run ./cmd/gitl --help
 
-# тесты
+# tests
 go test ./...
 ```
 
-Установка (после первого релиза):
+Install:
 
 ```bash
-go install github.com/akomyagin/gitl/cmd/gitl@latest
+go install github.com/akomyagin/gitl/cmd/gitl@main
 ```
 
-### Локальный тест мультипровайдерности (Ollama)
+### Local multi-provider test (Ollama)
 
-`docker-compose.yml` поднимает **только dev-зависимость** — локальный Ollama
-для проверки мультипровайдерного LLM-клиента (сам `gitl` в контейнер не оборачивается):
+`docker-compose.yml` starts **only the dev dependency** — a local Ollama instance for
+testing the multi-provider LLM client (`gitl` itself is not containerized):
 
 ```bash
 docker compose up ollama
 ```
 
-## Конфигурация (кратко)
+## Configuration
 
-Два уровня, сливаются по приоритету
-**флаг > env > `.gitl.yaml` (репо) > `~/.config/gitl/config.yaml` (личный)**.
-Repo-level `.gitl.yaml` коммитится в репозиторий как общая политика команды
-(порог риска, исключённые пути, категории changelog). Без ключа `gitl` работает
-в детерминированном offline-режиме.
+Two levels, merged by priority:
+**flag > env > `.gitl.yaml` (repo) > `~/.config/gitl/config.yaml` (personal)**.
+The repo-level `.gitl.yaml` is committed as a shared team policy (risk threshold, excluded
+paths, changelog categories). Without a key, `gitl` runs in deterministic offline mode.
 
-### Провайдеры (`llm.provider`)
+### Providers (`llm.provider`)
 
 ```yaml
-# OpenAI-совместимый API (дефолт)
+# OpenAI-compatible API (default)
 llm:
   provider: "openai"
-  api_key: ""            # или env GITL_API_KEY
+  api_key: ""            # or env GITL_API_KEY
   base_url: "https://api.openai.com/v1"
   model: "gpt-4o-mini"
 
-# Ollama — локально/self-hosted, без ключа, бесплатно
+# Ollama — local/self-hosted, no key, free
 llm:
   provider: "ollama"
   base_url: "http://localhost:11434/v1"
   model: "llama3.1"
 
-# Azure OpenAI — свой формат auth/endpoint
+# Azure OpenAI — custom auth/endpoint format
 llm:
   provider: "azure_openai"
-  api_key: ""             # или env GITL_API_KEY
-  model: "gpt-4o-mini"    # используется только для оценки стоимости
+  api_key: ""             # or env GITL_API_KEY
+  model: "gpt-4o-mini"    # used only for cost estimation
   azure_openai:
     endpoint: "https://<resource>.openai.azure.com"
     deployment: "<deployment-name>"
@@ -110,11 +109,11 @@ llm:
 
 ## GitHub Action
 
-`gitl` можно подключить как GitHub Action: он AI-ревьюит коммиты пул-реквеста
-и оставляет комментарий с риск-скорингом, опционально блокируя мерж по порогу
-риска. Action собирает `gitl` из исходников (`go install` на пиннутой версии).
+`gitl` can be wired up as a GitHub Action: it AI-reviews a pull request's commits and
+posts a comment with the risk score, optionally blocking merge above a threshold. The
+Action builds `gitl` from source (`go install` at a pinned version).
 
-Добавьте в свой репозиторий `.github/workflows/gitl-review.yml`:
+Add `.github/workflows/gitl-review.yml` to your repository:
 
 ```yaml
 name: gitl review
@@ -122,8 +121,8 @@ on:
   pull_request:
 
 permissions:
-  contents: read          # для checkout
-  pull-requests: write    # чтобы Action мог оставить комментарий-ревью
+  contents: read          # for checkout
+  pull-requests: write    # to post the review comment
 
 jobs:
   review:
@@ -131,40 +130,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0    # обязательно: без полной истории base..head не резолвится
+          fetch-depth: 0    # required: without full history base..head won't resolve
 
       - uses: akomyagin/gitl@v0.1.0
         with:
-          gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, см. ниже
-          fail-on: high                               # опционально: блокировать мерж при высоком риске
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, see below
+          fail-on: high                               # optional: block merge on high risk
 ```
 
-Безопасное использование в CI:
+Security best practices:
 
-- **Ключ — только через `secrets.*`.** `gitl-api-key` передаётся из
-  `secrets.GITL_API_KEY` (создаётся в Settings → Secrets and variables →
-  Actions вашего репозитория), никогда не хардкодится в YAML и не коммитится.
-  Если секрет не задан — Action работает в детерминированном **offline-
-  режиме** (без сети и без стоимости), а не падает.
-- **Минимальные `permissions:`.** Нужны только `pull-requests: write`
-  (постинг комментария) и `contents: read` (checkout) — не выдавайте Action'у
-  более широкие права.
-- **`fetch-depth: 0` обязателен.** GitHub даёт Action'у события `pull_request`
-  с `base`/`head` SHA, но не готовый диапазон коммитов; `actions/checkout` по
-  умолчанию делает shallow-клон, при котором `base.sha..head.sha` не
-  разрешится. Нужна полная история.
-- **`fail-on` по умолчанию — `never`.** Action только комментирует, не
-  блокирует мерж, пока вы явно не включите гейт (`fail-on: high` и т.п.) —
-  тот же принцип «WARN по умолчанию, hard gate — явный opt-in», что и в CLI
-  (`--fail-on`).
-- **Приватность диффов.** В CI дифф уходит тому LLM-провайдеру, что указан
-  в конфиге (по умолчанию — OpenAI-совместимый API). Для закрытого кода
-  используйте self-hosted/enterprise-провайдер (Ollama, Azure OpenAI) — см.
-  «Провайдеры» выше.
-- **Маскировка секретов.** GitHub автоматически маскирует значения
-  `secrets.*` в логах runner'а как `***`, но это не повод печатать ключ
-  в собственных шагах workflow.
+- **Key via `secrets.*` only.** `gitl-api-key` comes from `secrets.GITL_API_KEY` (set
+  under Settings → Secrets and variables → Actions), never hardcoded in YAML or committed.
+  If the secret is not set, the Action runs in deterministic **offline mode** (no network,
+  no cost).
+- **Minimal `permissions:`.** Only `pull-requests: write` (posting the comment) and
+  `contents: read` (checkout) are needed — do not grant broader rights.
+- **`fetch-depth: 0` is required.** GitHub provides `base`/`head` SHAs in the
+  `pull_request` event, but a shallow clone won't resolve `base.sha..head.sha`.
+- **`fail-on` defaults to `never`.** The Action only comments; it does not block merges
+  unless you opt in explicitly (`fail-on: high`, etc.) — same "WARN by default, hard gate
+  is explicit opt-in" principle as the CLI (`--fail-on`).
+- **Diff privacy.** In CI, the diff is sent to whichever LLM provider is configured
+  (default: OpenAI-compatible API). For private code, use a self-hosted/enterprise provider
+  (Ollama, Azure OpenAI) — see Providers above.
+- **Secret masking.** GitHub automatically masks `secrets.*` values in runner logs as
+  `***`, but that's not a reason to print the key in your own workflow steps.
 
-## Лицензия
+## License
 
 [MIT](LICENSE).
