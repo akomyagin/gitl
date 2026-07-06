@@ -1,0 +1,47 @@
+# Semi-automated self-test of ./action.yml (Этап 4, docs/TECHNICAL_PLAN.md §12.6/§12.8).
+#
+# This is the "semi-automated" tier from §12.8: it exercises the real
+# composite action (uses: ./) end-to-end — go install, gitl review, gh pr
+# comment, exit-code propagation — against this repo's own pull requests, but
+# it is NOT the fully manual "real external PR with a real API key" check
+# from §12.8, which stays a human verification step. Here gitl-api-key is
+# left empty on purpose: gitl's offline mode gives a deterministic review
+# with zero cost and zero network dependency, ideal for CI.
+name: Action self-test
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history is required to resolve base.sha..head.sha (§12.4.А).
+          fetch-depth: 0
+
+      - name: Run gitl review via the local action
+        uses: ./
+        with:
+          # Build gitl from the exact commit under test, not the action's
+          # pinned release default (v0.1.0) — the point of this workflow is
+          # to test the in-progress code, including before v0.1.0 exists.
+          #
+          # NOT github.sha: for a pull_request event, github.sha is the
+          # ephemeral merge-preview commit GitHub Actions synthesizes for the
+          # checkout (head merged onto base) — it is never pushed to the
+          # akomyagin/gitl remote as a reachable ref, so `go install`'s
+          # `git ls-remote origin` can't find it ("terminal prompts
+          # disabled" is git falling back to auth after failing to locate
+          # the ref at all). github.event.pull_request.head.sha is the real,
+          # pushed commit on the PR branch and is always fetchable — and
+          # always present here since this workflow only triggers on
+          # pull_request (see `on:` above).
+          gitl-version: ${{ github.event.pull_request.head.sha }}
+          # No gitl-api-key: offline review, no secret/API cost in CI.
+          fail-on: "never"

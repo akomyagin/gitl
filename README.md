@@ -14,12 +14,10 @@
 **BYOK** (bring your own key) и мультипровайдерность: OpenAI-совместимый API,
 Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии.
 
-> Статус: **Этап 3 — полный набор команд + мульти-репо digest**. Все три команды
-> (`review`/`changelog`/`digest`) работают на реальных репозиториях, все три
-> формата вывода (`md|text|json`); `changelog`/`digest` полностью детерминированы
-> (без LLM), `digest --repos=...` собирает несколько репозиториев параллельно
-> и корректно деградирует, если один из них недоступен. GitHub Action и релизный
-> инжиниринг — с Этапа 4. Подробности — в [`docs/PLAN.md`](docs/PLAN.md).
+> Статус: все три команды (`review`/`changelog`/`digest`) работают на реальных
+> репозиториях, все три формата вывода (`md|text|json`); ниже — готовый Action,
+> оставляющий AI-ревью комментарием к PR и гейтящий по риск-скорингу.
+> Подписанные релизы и публикация в Marketplace — впереди.
 
 ## Быстрый старт
 
@@ -81,8 +79,7 @@ docker compose up ollama
 **флаг > env > `.gitl.yaml` (репо) > `~/.config/gitl/config.yaml` (личный)**.
 Repo-level `.gitl.yaml` коммитится в репозиторий как общая политика команды
 (порог риска, исключённые пути, категории changelog). Без ключа `gitl` работает
-в детерминированном offline-режиме. Полная схема — в
-[`docs/TECHNICAL_PLAN.md`](docs/TECHNICAL_PLAN.md) §5.
+в детерминированном offline-режиме.
 
 ### Провайдеры (`llm.provider`)
 
@@ -111,13 +108,62 @@ llm:
     api_version: "2024-08-01-preview"
 ```
 
-## Документация
+## GitHub Action
 
-- [`docs/PLAN.md`](docs/PLAN.md) — видение, этапы, что за пределами MVP.
-- [`docs/TECHNICAL_PLAN.md`](docs/TECHNICAL_PLAN.md) — стек, архитектура,
-  детальная разбивка по этапам, риски.
-- [`docs/POST_MVP_PLAN.md`](docs/POST_MVP_PLAN.md) — nice-to-have, монетизация,
-  Excluded-Never.
+`gitl` можно подключить как GitHub Action: он AI-ревьюит коммиты пул-реквеста
+и оставляет комментарий с риск-скорингом, опционально блокируя мерж по порогу
+риска. Action собирает `gitl` из исходников (`go install` на пиннутой версии).
+
+Добавьте в свой репозиторий `.github/workflows/gitl-review.yml`:
+
+```yaml
+name: gitl review
+on:
+  pull_request:
+
+permissions:
+  contents: read          # для checkout
+  pull-requests: write    # чтобы Action мог оставить комментарий-ревью
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # обязательно: без полной истории base..head не резолвится
+
+      - uses: akomyagin/gitl@v0.1.0
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, см. ниже
+          fail-on: high                               # опционально: блокировать мерж при высоком риске
+```
+
+Безопасное использование в CI:
+
+- **Ключ — только через `secrets.*`.** `gitl-api-key` передаётся из
+  `secrets.GITL_API_KEY` (создаётся в Settings → Secrets and variables →
+  Actions вашего репозитория), никогда не хардкодится в YAML и не коммитится.
+  Если секрет не задан — Action работает в детерминированном **offline-
+  режиме** (без сети и без стоимости), а не падает.
+- **Минимальные `permissions:`.** Нужны только `pull-requests: write`
+  (постинг комментария) и `contents: read` (checkout) — не выдавайте Action'у
+  более широкие права.
+- **`fetch-depth: 0` обязателен.** GitHub даёт Action'у события `pull_request`
+  с `base`/`head` SHA, но не готовый диапазон коммитов; `actions/checkout` по
+  умолчанию делает shallow-клон, при котором `base.sha..head.sha` не
+  разрешится. Нужна полная история.
+- **`fail-on` по умолчанию — `never`.** Action только комментирует, не
+  блокирует мерж, пока вы явно не включите гейт (`fail-on: high` и т.п.) —
+  тот же принцип «WARN по умолчанию, hard gate — явный opt-in», что и в CLI
+  (`--fail-on`).
+- **Приватность диффов.** В CI дифф уходит тому LLM-провайдеру, что указан
+  в конфиге (по умолчанию — OpenAI-совместимый API). Для закрытого кода
+  используйте self-hosted/enterprise-провайдер (Ollama, Azure OpenAI) — см.
+  «Провайдеры» выше.
+- **Маскировка секретов.** GitHub автоматически маскирует значения
+  `secrets.*` в логах runner'а как `***`, но это не повод печатать ключ
+  в собственных шагах workflow.
 
 ## Лицензия
 

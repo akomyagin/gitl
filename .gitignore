@@ -21,3 +21,8 @@ go.work.sum
 # IDE
 .idea/
 .vscode/
+
+# Internal planning docs / AI-workflow instructions — kept locally, not published
+/docs/
+/.claude/
+/CLAUDE.md
