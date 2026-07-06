@@ -9,8 +9,8 @@
 //
 // The cost:/output:/policy:/diff: blocks and provider branching (openai /
 // ollama / azure_openai) are all wired into behavior as of Этап 2 (см.
-// docs/TECHNICAL_PLAN.md §5–§8). digest:/required_changelog_categories remain
-// schema-only until Этап 3.
+// docs/TECHNICAL_PLAN.md §5–§8). digest:/required_changelog_categories are
+// wired into changelog/digest as of Этап 3 (§9.3, §10.4/§10.6).
 package config
 
 import (
@@ -31,6 +31,7 @@ type Config struct {
 	Output OutputConfig `mapstructure:"output"`
 	Diff   DiffConfig   `mapstructure:"diff"`
 	Policy PolicyConfig `mapstructure:"policy"`
+	Digest DigestConfig `mapstructure:"digest"`
 }
 
 // LLMConfig configures the LLM provider and request parameters.
@@ -87,11 +88,26 @@ type DiffConfig struct {
 
 // PolicyConfig is the repo-level governance policy. fail_on is the CI gating
 // threshold wired into `review` as of Этап 2; required_changelog_categories is
-// used by changelog in Этап 3.
+// wired into `changelog` as of Этап 3 (warn-only, see docs/TECHNICAL_PLAN.md §9.3).
 type PolicyConfig struct {
 	FailOn                      string   `mapstructure:"fail_on"`
 	RequiredChangelogCategories []string `mapstructure:"required_changelog_categories"`
 	ExcludeGlobs                []string `mapstructure:"exclude_globs"`
+}
+
+// DigestConfig holds the repo-level multi-repo digest.repos list (§10.4/§10.6).
+// A --repos flag, when set, replaces this list wholesale rather than merging
+// with it (§10.4) — unlike exclude_globs, which adds.
+type DigestConfig struct {
+	Repos []RepoRef `mapstructure:"repos"`
+}
+
+// RepoRef is one entry of digest.repos: a filesystem path to another git
+// repository, resolved relative to the directory containing the repo-level
+// .gitl.yaml that declared it (or the current working directory if none was
+// found) — see §10.4.
+type RepoRef struct {
+	Path string `mapstructure:"path"`
 }
 
 // Options controls how Load discovers config files.
@@ -204,7 +220,21 @@ func Load(opts Options) (*Config, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	cfg.resolveDigestRepoPaths(repoDir)
 	return &cfg, nil
+}
+
+// resolveDigestRepoPaths makes every digest.repos[].path absolute relative to
+// repoDir — the directory containing the repo-level .gitl.yaml that declared
+// it (or the current working directory when no .gitl.yaml was found), per
+// docs/TECHNICAL_PLAN.md §10.4. Already-absolute paths are left untouched.
+func (c *Config) resolveDigestRepoPaths(repoDir string) {
+	for i, ref := range c.Digest.Repos {
+		if ref.Path == "" || filepath.IsAbs(ref.Path) {
+			continue
+		}
+		c.Digest.Repos[i].Path = filepath.Join(repoDir, ref.Path)
+	}
 }
 
 // mergeFile merges a YAML file into v if it exists. A missing file is not an
