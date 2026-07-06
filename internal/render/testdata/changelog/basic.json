@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "command": "changelog",
+  "generated_at": "2026-07-06T09:00:00Z",
+  "range": "v1.2.0..HEAD",
+  "breaking_changes": [],
+  "categories": {
+    "Added": [
+      {
+        "hash": "a1b2c3d",
+        "subject": "add token refresh endpoint",
+        "breaking": false
+      }
+    ],
+    "Changed": [],
+    "Deprecated": [],
+    "Fixed": [
+      {
+        "hash": "9f8e7d6",
+        "subject": "correct off-by-one in pagination",
+        "breaking": false
+      }
+    ],
+    "Other": [
+      {
+        "hash": "1122334",
+        "subject": "update contributing guide",
+        "breaking": false
+      }
+    ],
+    "Removed": [],
+    "Security": []
+  },
+  "missing_required_categories": [
+    "Security"
+  ]
+}

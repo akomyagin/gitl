@@ -178,3 +178,54 @@ func TestValidateNormalizesFailOnCase(t *testing.T) {
 		t.Errorf("fail_on = %q, want normalized \"high\"", cfg.Policy.FailOn)
 	}
 }
+
+// TestDigestRepoRelativePathResolvedAgainstRepoDir is the regression test for
+// resolveDigestRepoPaths' actual join branch (docs/TECHNICAL_PLAN.md §10.4):
+// a relative digest.repos[].path must be resolved against repoDir (the
+// directory containing the repo-level .gitl.yaml that declared it), not left
+// as-is or resolved against the process cwd. Uses a genuinely relative path
+// ("../other-repo") so the early-return branches for "" and already-absolute
+// paths are not hit — those are already exercised indirectly by the
+// cli-level digest tests, which only ever pass absolute t.TempDir() paths.
+func TestDigestRepoRelativePathResolvedAgainstRepoDir(t *testing.T) {
+	repoDir := t.TempDir()
+	personalPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	writeFile(t, filepath.Join(repoDir, ".gitl.yaml"), "digest:\n  repos:\n    - path: \"../other-repo\"\n")
+
+	cfg, err := Load(Options{RepoDir: repoDir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if len(cfg.Digest.Repos) != 1 {
+		t.Fatalf("Digest.Repos = %+v, want exactly 1 entry", cfg.Digest.Repos)
+	}
+	want := filepath.Join(repoDir, "../other-repo")
+	if got := cfg.Digest.Repos[0].Path; got != want {
+		t.Errorf("Digest.Repos[0].Path = %q, want %q (relative path joined against repoDir)", got, want)
+	}
+	if !filepath.IsAbs(cfg.Digest.Repos[0].Path) {
+		t.Errorf("Digest.Repos[0].Path = %q, want an absolute path after resolution", cfg.Digest.Repos[0].Path)
+	}
+}
+
+// TestDigestRepoAbsolutePathLeftUntouched documents the sibling branch: an
+// already-absolute digest.repos[].path must survive Load() unchanged, not be
+// re-joined against repoDir.
+func TestDigestRepoAbsolutePathLeftUntouched(t *testing.T) {
+	repoDir := t.TempDir()
+	personalPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	absPath := filepath.Join(t.TempDir(), "some-service")
+	writeFile(t, filepath.Join(repoDir, ".gitl.yaml"), "digest:\n  repos:\n    - path: \""+filepath.ToSlash(absPath)+"\"\n")
+
+	cfg, err := Load(Options{RepoDir: repoDir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Digest.Repos) != 1 {
+		t.Fatalf("Digest.Repos = %+v, want exactly 1 entry", cfg.Digest.Repos)
+	}
+	if got := cfg.Digest.Repos[0].Path; got != absPath {
+		t.Errorf("Digest.Repos[0].Path = %q, want unchanged %q", got, absPath)
+	}
+}

@@ -1,9 +1,8 @@
 // Package cli wires up the gitl command tree (cobra) and shared scaffolding:
 // persistent flags, viper-backed config loading, and slog setup.
 //
-// One file per command: root.go (this scaffold), version.go, review.go.
-// changelog.go and digest.go are Этап 3 — not created yet
-// (see docs/TECHNICAL_PLAN.md §6).
+// One file per command: root.go (this scaffold), version.go, review.go,
+// changelog.go, digest.go (see docs/TECHNICAL_PLAN.md §6, §9, §10).
 package cli
 
 import (
@@ -33,7 +32,7 @@ func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "gitl",
 		Short:         "AI reviewer of git history (git-log-lens)",
-		Long:          "gitl AI-reviews a git commit range (`gitl review <range>`) with an LLM, producing a structured risk score (low|medium|high) and md/text/json output.\n\nWithout an API key it falls back to a deterministic offline review. changelog/digest land in Этап 3.",
+		Long:          "gitl AI-reviews a git commit range (`gitl review <range>`) with an LLM, producing a structured risk score (low|medium|high) and md/text/json output.\n\nWithout an API key it falls back to a deterministic offline review.\n\ngitl changelog groups a range into Keep a Changelog categories, and gitl digest\naggregates activity over a day window (optionally across multiple repos) — both are\nfully deterministic and never call an LLM.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {
@@ -46,6 +45,8 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(newVersionCmd())
 	root.AddCommand(newReviewCmd(gf))
+	root.AddCommand(newChangelogCmd(gf))
+	root.AddCommand(newDigestCmd(gf))
 
 	return root
 }

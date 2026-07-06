@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "command": "digest",
+  "generated_at": "2026-07-06T09:00:00Z",
+  "days": 7,
+  "since": "2026-06-29T09:00:00Z",
+  "until": "2026-07-06T09:00:00Z",
+  "repos": [
+    {
+      "path": "../service-a",
+      "ok": true,
+      "error": "",
+      "stats": {
+        "commits": 23,
+        "files_changed": 14,
+        "lines_added": 812,
+        "lines_removed": 145
+      },
+      "by_author": [
+        {
+          "author": "Jane Doe",
+          "commits": 14,
+          "lines_added": 610,
+          "lines_removed": 90
+        },
+        {
+          "author": "John Roe",
+          "commits": 9,
+          "lines_added": 202,
+          "lines_removed": 55
+        }
+      ],
+      "by_topic": [
+        {
+          "topic": "feat",
+          "commits": 10
+        },
+        {
+          "topic": "fix",
+          "commits": 7
+        },
+        {
+          "topic": "other",
+          "commits": 6
+        }
+      ],
+      "top_files": [
+        {
+          "path": "internal/llm/client.go",
+          "commits": 5
+        },
+        {
+          "path": "README.md",
+          "commits": 3
+        }
+      ]
+    },
+    {
+      "path": "../service-b",
+      "ok": false,
+      "error": "not a git repository (or any of the parent directories)",
+      "stats": null,
+      "by_author": null,
+      "by_topic": null,
+      "top_files": null
+    },
+    {
+      "path": "../service-c",
+      "ok": true,
+      "error": "",
+      "stats": {
+        "commits": 18,
+        "files_changed": 6,
+        "lines_added": 392,
+        "lines_removed": 245
+      },
+      "by_author": [
+        {
+          "author": "Amy Lin",
+          "commits": 18,
+          "lines_added": 392,
+          "lines_removed": 245
+        }
+      ],
+      "by_topic": [
+        {
+          "topic": "fix",
+          "commits": 18
+        }
+      ],
+      "top_files": [
+        {
+          "path": "main.go",
+          "commits": 4
+        }
+      ]
+    }
+  ],
+  "overall": {
+    "repos_requested": 3,
+    "repos_ok": 2,
+    "repos_failed": 1,
+    "combined_commits": 41,
+    "combined_lines_added": 1204,
+    "combined_lines_removed": 390
+  }
+}
