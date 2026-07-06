@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "command": "changelog",
+  "generated_at": "2026-07-06T09:00:00Z",
+  "range": "v2.0.0..HEAD",
+  "breaking_changes": [
+    {
+      "hash": "d4e5f6a",
+      "subject": "drop support for config schema v0",
+      "category": "Added"
+    }
+  ],
+  "categories": {
+    "Added": [
+      {
+        "hash": "d4e5f6a",
+        "subject": "rework session store API",
+        "breaking": true
+      }
+    ],
+    "Changed": [],
+    "Deprecated": [],
+    "Fixed": [],
+    "Other": [],
+    "Removed": [],
+    "Security": []
+  },
+  "missing_required_categories": []
+}
