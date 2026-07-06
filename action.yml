@@ -1,0 +1,110 @@
+name: "gitl review"
+description: >-
+  AI review of a pull request's commits with a machine-readable risk score
+  (low|medium|high), posted as a PR comment. See docs/TECHNICAL_PLAN.md §12.
+branding:
+  icon: "git-commit"
+  color: "purple"
+
+inputs:
+  gitl-api-key:
+    description: >-
+      LLM API key (BYOK). Pass via secrets.GITL_API_KEY. If empty, gitl runs
+      a deterministic offline review (no network call, no cost).
+    required: false
+    default: ""
+  github-token:
+    description: >-
+      Token used to post the PR comment via `gh pr comment`. Defaults to the
+      workflow's GITHUB_TOKEN. The workflow must grant it `pull-requests: write`.
+    required: false
+    default: ${{ github.token }}
+  fail-on:
+    description: >-
+      Risk threshold that fails the check (never|low|medium|high). Default is
+      "never" — the Action only comments, it does not block merges, unless the
+      caller opts in explicitly (project principle: default WARN, hard gate is
+      explicit opt-in — docs/TECHNICAL_PLAN.md §9/§13).
+    required: false
+    default: "never"
+  max-cost-usd:
+    description: >-
+      Cost guard passed through to `gitl review --max-cost-usd`. <=0 disables it.
+    required: false
+    default: "0.50"
+  gitl-version:
+    description: >-
+      Git ref of akomyagin/gitl to build with `go install` (tag/branch/SHA).
+      Defaults to the CLI version that ships with THIS action release — override
+      only for testing (e.g. this repo's own action-selftest.yml pins it to
+      ${{ github.sha }} to exercise the in-progress commit before a tag exists).
+    required: false
+    default: "v0.1.0"
+  base-sha:
+    description: "Base SHA of the range to review. Defaults to the pull_request event's base SHA."
+    required: false
+    default: ${{ github.event.pull_request.base.sha }}
+  head-sha:
+    description: "Head SHA of the range to review. Defaults to the pull_request event's head SHA."
+    required: false
+    default: ${{ github.event.pull_request.head.sha }}
+  pr-number:
+    description: "Pull request number to comment on. Defaults to the pull_request event's number."
+    required: false
+    default: ${{ github.event.pull_request.number }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: "1.22"
+        cache: true
+
+    - name: Install gitl
+      shell: bash
+      run: go install "github.com/akomyagin/gitl/cmd/gitl@${{ inputs.gitl-version }}"
+
+    - name: Run gitl review and post PR comment
+      shell: bash
+      env:
+        # Secrets/tokens are passed ONLY via env:, never interpolated into the
+        # run: script and never echoed (docs/TECHNICAL_PLAN.md §12.5). This
+        # step also does not `set -x`, so GH Actions' log masking of secrets.*
+        # values is never defeated by us printing the command line.
+        GH_TOKEN: ${{ inputs.github-token }}
+        GITL_API_KEY: ${{ inputs.gitl-api-key }}
+        GITL_RANGE: ${{ inputs.base-sha }}..${{ inputs.head-sha }}
+        GITL_FAIL_ON: ${{ inputs.fail-on }}
+        GITL_MAX_COST_USD: ${{ inputs.max-cost-usd }}
+        GITL_PR_NUMBER: ${{ inputs.pr-number }}
+      run: |
+        set -euo pipefail
+
+        # Single gitl invocation (one LLM call at most, §12.3): --format=json
+        # carries both the review body (review_markdown) and the machine
+        # risk level, so the comment body and the risk gate share one run.
+        review_exit=0
+        gitl review "$GITL_RANGE" \
+          --format=json \
+          --fail-on="$GITL_FAIL_ON" \
+          --max-cost-usd="$GITL_MAX_COST_USD" \
+          > review.json || review_exit=$?
+
+        {
+          echo "<!-- gitl-review -->"
+          echo "## gitl review \`$GITL_RANGE\`"
+          echo
+          jq -r '"**Risk:** " + (.risk.level | ascii_upcase) + " — " + .risk.summary' review.json
+          echo
+          jq -r '.review_markdown' review.json
+        } > comment.md
+
+        # Post the review BEFORE propagating the risk-gate exit code, so a
+        # blocked (high-risk) PR still shows the reasoning, not just a bare
+        # "job failed" (docs/TECHNICAL_PLAN.md §12.4.Б, same "show reasoning
+        # before failing" principle as `gitl review --fail-on` itself).
+        gh pr comment "$GITL_PR_NUMBER" --body-file comment.md
+
+        exit "$review_exit"
