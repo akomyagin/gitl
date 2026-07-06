@@ -1,0 +1,63 @@
+# goreleaser v2 configuration for gitl (git-log-lens).
+# Docs: https://goreleaser.com
+version: 2
+
+before:
+  hooks:
+    - go mod download
+
+builds:
+  - id: gitl
+    main: ./cmd/gitl
+    binary: gitl
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/akomyagin/gitl/internal/cli.version={{.Version}}
+      - -X github.com/akomyagin/gitl/internal/cli.commit={{.Commit}}
+      - -X github.com/akomyagin/gitl/internal/cli.date={{.CommitDate}}
+
+archives:
+  - id: gitl
+    name_template: "gitl_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Keyless (OIDC) signing of the checksums file only. The generated .pem
+# (certificate) and .sig (signature) let consumers verify provenance with
+# `cosign verify-blob` without any long-lived key.
+signs:
+  - cmd: cosign
+    certificate: "${artifact}.pem"
+    args:
+      - sign-blob
+      - --output-signature=${signature}
+      - --output-certificate=${certificate}
+      - --yes
+      - ${artifact}
+    artifacts: checksum
+    output: true
+
+changelog:
+  use: github
+
+release:
+  github:
+    owner: akomyagin
+    name: gitl
