@@ -13,6 +13,7 @@ import (
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/gitlog"
 	"github.com/akomyagin/gitl/internal/render"
+	"github.com/akomyagin/gitl/internal/tui"
 )
 
 // defaultDigestDays is the default --days window (§10.1).
@@ -41,6 +42,7 @@ func newDigestCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().Int("days", defaultDigestDays, "size of the activity window in days (must be > 0)")
 	cmd.Flags().String("repos", "", "comma-separated list of repository paths (overrides digest.repos entirely)")
 	cmd.Flags().String("format", "", "output format (md | text | json)")
+	cmd.Flags().Bool("tui", false, "interactive TUI viewer (requires a terminal)")
 
 	return cmd
 }
@@ -73,6 +75,18 @@ func runDigest(ctx context.Context, cmd *cobra.Command, gf *globalFlags) error {
 	results := gitlog.CollectDigests(ctx, repoPaths, since, concurrency)
 
 	art := buildDigestArtifact(now, days, since, results)
+
+	tuiFlag, _ := cmd.Flags().GetBool("tui")
+	if tuiFlag {
+		if !isTerminal(cmd.OutOrStdout()) {
+			fmt.Fprintln(cmd.ErrOrStderr(), "gitl: --tui requires a terminal — falling back to plain output")
+		} else {
+			if cmd.Flags().Changed("format") {
+				fmt.Fprintln(cmd.ErrOrStderr(), "gitl: --tui ignores --format (interactive view)")
+			}
+			return tui.Run(ctx, art)
+		}
+	}
 	return render.RenderDigest(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format))
 }
 

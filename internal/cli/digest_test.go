@@ -173,6 +173,24 @@ func repoJSONPath(path string) string {
 	return path
 }
 
+// TestDigestTUIFallbackNonTerminal verifies that with --tui set but stdout not
+// a terminal (a bytes.Buffer via the test harness), runDigest falls back to
+// plain rendered output and warns on stderr — it must not attempt to launch the
+// interactive TUI (which would hang without a TTY).
+func TestDigestTUIFallbackNonTerminal(t *testing.T) {
+	dir := setupDigestRepo(t, "feat: tui fallback")
+	out, errOut, err := runDigestInDir(t, dir, "--tui")
+	if err != nil {
+		t.Fatalf("digest --tui must not fail without a terminal: %v", err)
+	}
+	if !strings.Contains(out, "# Digest — last 7 days") {
+		t.Errorf("expected plain digest output on fallback:\n%s", out)
+	}
+	if !strings.Contains(errOut, "--tui requires a terminal") {
+		t.Errorf("expected fallback warning on stderr, got:\n%s", errOut)
+	}
+}
+
 func TestDigestEmptyWindowIsNotAnError(t *testing.T) {
 	dir := setupDigestRepo(t, "feat: old")
 	// Move the commit far in the past by rewriting author/committer dates,
