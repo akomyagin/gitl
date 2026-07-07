@@ -7,21 +7,22 @@ repository's git history and turns it into a structured engineering artifact via
 
 - **`gitl review <range>`** — AI review of a commit range / PR with machine-readable
   risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → non-zero exit code);
+  streams tokens to the terminal in real time; on-disk LLM response cache;
+  custom system-prompt templates.
 - **`gitl changelog [<range>]`** — Keep a Changelog-style changelog, grouped by
   conventional commits (defaults to last tag → `HEAD`);
 - **`gitl digest [--days=N] [--repos=a,b,c]`** — activity summary by author/topic/file,
-  including **multiple repositories in parallel**.
+  including **multiple repositories in parallel**; interactive TUI viewer (`--tui`).
 
 A clean CLI binary plus a GitHub Action wrapper — no server, no database, no hosted key
 storage. **BYOK** (bring your own key) with multi-provider support: OpenAI-compatible API,
 Ollama (local/self-hosted), Azure OpenAI. No telemetry.
 
-> **Status:** MVP complete. All three commands (`review`/`changelog`/`digest`) work on real
-> repositories with all three output formats (`md|text|json`). The Action posts AI reviews as
-> sticky PR comments and gates on risk score. The latest tagged release, `v0.2.1`, ships
-> cross-compiled, cosign-signed release binaries. SLSA L3 build provenance alongside cosign
-> signatures is implemented on `main` and will ship with the next tag, `v0.3.0`
-> (see [VERIFY.md](VERIFY.md) for verification). Marketplace listing is the remaining manual step.
+> **Status:** `v0.3.0` released — all three commands work on real repositories with all
+> three output formats (`md|text|json`). The Action posts AI reviews as sticky PR comments
+> and gates on risk score. Release binaries are cross-compiled, cosign-signed, and covered
+> by SLSA L3 build provenance (see [VERIFY.md](VERIFY.md)). Marketplace listing is the
+> remaining manual step.
 
 ## Quick start
 
@@ -31,11 +32,11 @@ Requires **Go 1.22+** and **git** in `PATH`.
 # build
 go build ./...
 
-# AI review of a commit range (no key = deterministic offline review)
-go run ./cmd/gitl review HEAD~5..HEAD
-
-# with a key — real review via OpenAI-compatible API with risk scoring
+# AI review of a commit range — streams tokens to the terminal in real time
 GITL_API_KEY=sk-... go run ./cmd/gitl review HEAD~5..HEAD
+
+# no key = deterministic offline review (heuristic risk, no network call)
+go run ./cmd/gitl review HEAD~5..HEAD
 
 # machine-readable output for CI + risk gating
 go run ./cmd/gitl review HEAD~5..HEAD --format=json
@@ -43,6 +44,15 @@ go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # non-zero exit on high r
 
 # estimate cost without making an API call
 go run ./cmd/gitl review HEAD~5..HEAD --dry-run
+
+# custom system-prompt template (e.g. your team's review policy)
+go run ./cmd/gitl review HEAD~5..HEAD --system-template=./review-policy.md
+
+# skip the on-disk LLM cache (always call the model)
+go run ./cmd/gitl review HEAD~5..HEAD --no-cache
+
+# disable streaming (non-interactive, buffered output)
+go run ./cmd/gitl review HEAD~5..HEAD --no-stream
 
 # changelog from last tag (or full history if no tags) — no LLM
 go run ./cmd/gitl changelog
@@ -53,6 +63,9 @@ go run ./cmd/gitl digest --days=14
 
 # multi-repo digest: runs in parallel; one unreachable repo does not fail the rest
 go run ./cmd/gitl digest --repos=../service-a,../service-b --format=json
+
+# interactive TUI viewer for digest (requires a TTY)
+go run ./cmd/gitl digest --days=14 --tui
 
 go run ./cmd/gitl version
 go run ./cmd/gitl --help
@@ -120,6 +133,48 @@ llm:
     api_version: "2024-08-01-preview"
 ```
 
+### Streaming (`output.stream`)
+
+When reviewing interactively (`md` or `text` format on a TTY), `gitl` streams tokens
+to the terminal as they arrive — no waiting for the full response. Streaming is on by
+default and switches off automatically in CI (non-TTY stdout) or with `--format=json`.
+
+```yaml
+output:
+  stream: true   # default; set false to always buffer
+```
+
+Disable per-call: `gitl review HEAD~5..HEAD --no-stream`
+
+### LLM response cache (`cache`)
+
+`gitl review` caches model responses on disk (SHA-256 of provider + model + prompt).
+Identical diffs reuse the cached result instantly, with no API call or cost.
+
+```yaml
+cache:
+  enabled: true    # default
+  ttl_hours: 24    # entries older than this are ignored
+```
+
+Cache lives in `~/.cache/gitl/review/` (XDG-compliant). Disable per-call:
+`gitl review HEAD~5..HEAD --no-cache`
+
+### Custom templates (`output.system_template`)
+
+Supply your own system prompt to steer the model's review focus — security checklist,
+architecture constraints, team-specific rules:
+
+```yaml
+output:
+  system_template: "./review-policy.md"   # path relative to CWD
+```
+
+Override per-call: `gitl review HEAD~5..HEAD --system-template=./my-policy.md`
+
+The template has access to `{{ .Commits }}`, `{{ .Diff }}`, `{{ .RepoName }}` and
+the full set of template functions documented in `internal/prompt/templates.go`.
+
 ## GitHub Action
 
 `gitl` can be wired up as a GitHub Action: it AI-reviews a pull request's commits and
@@ -145,7 +200,7 @@ jobs:
         with:
           fetch-depth: 0    # required: without full history base..head won't resolve
 
-      - uses: akomyagin/gitl@v0.2.1
+      - uses: akomyagin/gitl@v0.3.0
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, see below
           fail-on: high                               # optional: block merge on high risk

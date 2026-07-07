@@ -7,22 +7,22 @@
 
 - **`gitl review <range>`** — AI-ревью диапазона/PR с машиночитаемым риск-скорингом
   (`low|medium|high`) для гейтинга в CI (`--fail-on=high` → ненулевой exit code);
+  стримит токены в терминал в реальном времени; дисковый кэш LLM-ответов;
+  кастомные системные шаблоны промптов.
 - **`gitl changelog [<range>]`** — changelog в стиле Keep a Changelog, группировка
   по conventional-commits (по умолчанию — диапазон от последнего тега до `HEAD`);
 - **`gitl digest [--days=N] [--repos=a,b,c]`** — сводка активности по авторам/темам/
-  файлам, в т.ч. по **нескольким репозиториям параллельно**.
+  файлам, в т.ч. по **нескольким репозиториям параллельно**; интерактивный TUI (`--tui`).
 
 Чистый CLI-бинарник плюс GitHub Action-обёртка — без сервера, БД и хостинга ключей.
 **BYOK** (bring your own key) и мультипровайдерность: OpenAI-совместимый API,
 Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии.
 
-> Статус: MVP завершён. Все три команды (`review`/`changelog`/`digest`) работают
-> на реальных репозиториях, все три формата вывода (`md|text|json`); ниже —
-> готовый Action, оставляющий AI-ревью sticky-комментарием к PR и гейтящий по
-> риск-скорингу. Последний выпущенный тег, `v0.2.1`, — кросс-компилированные,
-> подписанные cosign бинари. SLSA L3 provenance рядом с cosign-подписями реализован
-> в `main` и выйдет со следующим тегом, `v0.3.0` (верификация — в
-> [VERIFY.md](VERIFY.md)). Публикация в Marketplace — оставшийся ручной шаг.
+> **Статус:** выпущен `v0.3.0` — все три команды работают на реальных репозиториях,
+> все три формата вывода (`md|text|json`); Action оставляет AI-ревью sticky-комментарием
+> к PR и гейтит по риск-скорингу. Релизные бинари кросс-компилированы, подписаны cosign
+> и покрыты SLSA L3 provenance (верификация — в [VERIFY.md](VERIFY.md)).
+> Публикация в Marketplace — оставшийся ручной шаг.
 
 ## Быстрый старт
 
@@ -32,11 +32,11 @@ Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии
 # собрать
 go build ./...
 
-# AI-ревью диапазона коммитов (без ключа — детерминированный offline-обзор)
-go run ./cmd/gitl review HEAD~5..HEAD
-
-# с ключом — реальный обзор через OpenAI-совместимый API, с риск-скорингом
+# AI-ревью диапазона коммитов — токены стримятся в терминал в реальном времени
 GITL_API_KEY=sk-... go run ./cmd/gitl review HEAD~5..HEAD
+
+# без ключа — детерминированный offline-обзор (эвристика, без сети)
+go run ./cmd/gitl review HEAD~5..HEAD
 
 # машиночитаемый вывод для CI + гейтинг по риску
 go run ./cmd/gitl review HEAD~5..HEAD --format=json
@@ -44,6 +44,15 @@ go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # ненулевой exit
 
 # оценка стоимости без реального вызова API
 go run ./cmd/gitl review HEAD~5..HEAD --dry-run
+
+# кастомный системный шаблон (например, политика ревью вашей команды)
+go run ./cmd/gitl review HEAD~5..HEAD --system-template=./review-policy.md
+
+# пропустить дисковый кэш LLM-ответов (всегда вызывать модель)
+go run ./cmd/gitl review HEAD~5..HEAD --no-cache
+
+# отключить стриминг (буферизованный вывод)
+go run ./cmd/gitl review HEAD~5..HEAD --no-stream
 
 # changelog с последнего тега (или вся история, если тегов нет) — без LLM
 go run ./cmd/gitl changelog
@@ -55,6 +64,9 @@ go run ./cmd/gitl digest --days=14
 # мульти-репо digest: собирается параллельно, один недоступный репозиторий
 # не валит остальные
 go run ./cmd/gitl digest --repos=../service-a,../service-b --format=json
+
+# интерактивный TUI-просмотрщик дайджеста (требует TTY)
+go run ./cmd/gitl digest --days=14 --tui
 
 go run ./cmd/gitl version
 go run ./cmd/gitl --help
@@ -84,7 +96,7 @@ brew install akomyagin/tap/gitl
 docker compose up ollama
 ```
 
-## Конфигурация (кратко)
+## Конфигурация
 
 Два уровня, сливаются по приоритету:
 **флаг > env > `.gitl.yaml` (репо) > `~/.config/gitl/config.yaml` (личный)**.
@@ -124,6 +136,48 @@ llm:
     api_version: "2024-08-01-preview"
 ```
 
+### Стриминг (`output.stream`)
+
+При интерактивном ревью (`md` или `text` в TTY) `gitl` стримит токены в терминал
+по мере поступления — не нужно ждать полного ответа. Стриминг включён по умолчанию
+и автоматически отключается в CI (не-TTY stdout) или с `--format=json`.
+
+```yaml
+output:
+  stream: true   # по умолчанию; false — всегда буферизовать
+```
+
+Отключить для одного вызова: `gitl review HEAD~5..HEAD --no-stream`
+
+### Кэш LLM-ответов (`cache`)
+
+`gitl review` кэширует ответы модели на диск (SHA-256 от провайдера + модели + промпта).
+Одинаковые диффы переиспользуют кэш мгновенно — без API-вызова и без стоимости.
+
+```yaml
+cache:
+  enabled: true    # по умолчанию
+  ttl_hours: 24    # записи старше этого игнорируются
+```
+
+Кэш хранится в `~/.cache/gitl/review/` (XDG-совместимо). Пропустить для одного вызова:
+`gitl review HEAD~5..HEAD --no-cache`
+
+### Кастомные шаблоны (`output.system_template`)
+
+Подайте собственный системный промпт — чеклист безопасности, архитектурные ограничения,
+правила команды:
+
+```yaml
+output:
+  system_template: "./review-policy.md"   # путь относительно CWD
+```
+
+Переопределить для одного вызова: `gitl review HEAD~5..HEAD --system-template=./my-policy.md`
+
+Шаблон получает `{{ .Commits }}`, `{{ .Diff }}`, `{{ .RepoName }}` и полный набор
+функций, задокументированных в `internal/prompt/templates.go`.
+
 ## GitHub Action
 
 `gitl` можно подключить как GitHub Action: он AI-ревьюит коммиты пул-реквеста
@@ -149,7 +203,7 @@ jobs:
         with:
           fetch-depth: 0    # обязательно: без полной истории base..head не резолвится
 
-      - uses: akomyagin/gitl@v0.2.1
+      - uses: akomyagin/gitl@v0.3.0
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, см. ниже
           fail-on: high                               # опционально: блокировать мерж при высоком риске
