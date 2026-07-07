@@ -92,6 +92,11 @@ var tmplFuncs = template.FuncMap{
 	"trimTrailingNewlines": func(s string) string { return strings.TrimRight(s, "\n") },
 }
 
+// TemplateFuncs returns the FuncMap available to output and system templates.
+// Callers (config validation, prompt building) use this to register the same
+// functions so template parse errors surface at load time, not at render time.
+func TemplateFuncs() template.FuncMap { return tmplFuncs }
+
 // RenderWithTemplate behaves like Render, but uses a custom text/template file
 // for the md format when outputTemplateFile is non-empty. For text/json,
 // outputTemplateFile is ignored (a warning is logged via slog.Warn when a path

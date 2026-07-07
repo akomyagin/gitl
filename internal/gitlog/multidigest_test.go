@@ -2,6 +2,7 @@ package gitlog
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -162,5 +163,74 @@ func TestDefaultConcurrency(t *testing.T) {
 	// A large repo count should never exceed GOMAXPROCS.
 	if got := DefaultConcurrency(10_000); got < 1 {
 		t.Errorf("DefaultConcurrency(10000) = %d, want >= 1", got)
+	}
+}
+
+// setupMultiCommitRepo creates a temporary git repo with n commits, each
+// touching a distinct file. Used by Item 2 tests to exercise the intra-repo
+// errgroup parallel path (n > 1 goroutines calling DiffForCommit concurrently).
+func setupMultiCommitRepo(t *testing.T, n int) string {
+	t.Helper()
+	if n < 1 {
+		t.Fatalf("setupMultiCommitRepo: n must be >= 1, got %d", n)
+	}
+	dir := t.TempDir()
+	runMultidigestGit(t, dir, "init", "-q", "-b", "main")
+	for i := range n {
+		name := filepath.Join(dir, fmt.Sprintf("file%d.go", i))
+		if err := os.WriteFile(name, []byte("package main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runMultidigestGit(t, dir, "add", ".")
+		msg := "feat: commit " + string(rune('A'+i))
+		runMultidigestGit(t, dir, "commit", "-q", "-m", msg)
+	}
+	return dir
+}
+
+// TestCollectDigestsMultipleCommitsPerRepoParallel: a repository with 3+
+// commits exercises the intra-repo errgroup path introduced in Item 2.
+// The returned Digest.Commits must equal the number of commits in the window
+// (identical output to the previous sequential implementation).
+func TestCollectDigestsMultipleCommitsPerRepoParallel(t *testing.T) {
+	t.Parallel()
+	const numCommits = 3
+	dir := setupMultiCommitRepo(t, numCommits)
+	since := time.Now().Add(-24 * time.Hour)
+
+	results := CollectDigests(context.Background(), []string{dir}, since, 1)
+
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	r := results[0]
+	if r.Err != nil {
+		t.Fatalf("Err = %v, want nil", r.Err)
+	}
+	if r.Digest.Commits != numCommits {
+		t.Errorf("Digest.Commits = %d, want %d", r.Digest.Commits, numCommits)
+	}
+}
+
+// TestCollectDigestsIntraRepoCancelledCtx: when the context is already
+// cancelled before collectOne runs, the per-repo RepoResult carries the
+// cancellation error (the early ctx.Err() check fires before the errgroup).
+// Distinct from TestCollectDigestsContextCancellation which tests the outer
+// dispatch loop cancellation.
+func TestCollectDigestsIntraRepoCancelledCtx(t *testing.T) {
+	t.Parallel()
+	dir := setupMultiCommitRepo(t, 3)
+	since := time.Now().Add(-24 * time.Hour)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	results := CollectDigests(ctx, []string{dir}, since, 1)
+
+	if len(results) != 1 {
+		t.Fatalf("results len = %d, want 1", len(results))
+	}
+	if results[0].Err == nil {
+		t.Error("Err = nil, want context.Canceled")
 	}
 }
