@@ -103,6 +103,10 @@ type OutputConfig struct {
 	// (Item 3). Empty means the built-in Markdown rendering; it is ignored for
 	// the text/json formats.
 	TemplateFile string `mapstructure:"template_file"`
+	// Stream enables token-by-token SSE streaming for `review` when stdout is a
+	// terminal and the format is md/text (Item 1). Disabled by --no-stream or in
+	// offline/json/non-TTY contexts.
+	Stream bool `mapstructure:"stream"`
 }
 
 // DiffConfig bounds the diff sent to the LLM: max_diff_bytes is the truncation
@@ -168,6 +172,7 @@ func defaults() map[string]any {
 		"output.format":               "md",
 		"output.color":                true,
 		"output.template_file":        "",
+		"output.stream":               true,
 		"prompt.system_template_file": "",
 		"diff.max_diff_bytes":         120000,
 		"diff.exclude_globs":          []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},

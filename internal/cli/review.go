@@ -59,6 +59,7 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().Float64("max-cost-usd", 0, "block the request if the estimated cost exceeds this (<=0 disables the guard)")
 	cmd.Flags().Bool("dry-run", false, "print a cost estimate and exit without calling the API")
 	cmd.Flags().Bool("no-cache", false, "skip LLM response cache (always call the API)")
+	cmd.Flags().Bool("no-stream", false, "disable token-by-token streaming (wait for full response)")
 
 	return cmd
 }
@@ -160,6 +161,37 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 	provider, err := selectProvider(cmd, cfg, commits, diff)
 	if err != nil {
 		return err
+	}
+
+	// Streaming branch (Item 1): stream tokens to a terminal for md/text output.
+	// The body is written directly by Stream; only the risk header is appended
+	// afterward, so the full Artifact renderer is NOT invoked here.
+	if s, ok := provider.(llm.Streamer); ok && wantStream(cmd, cfg) {
+		out := cmd.OutOrStdout()
+		resp, err := s.Stream(ctx, llm.Request{
+			System:      system,
+			User:        user,
+			Model:       cfg.LLM.Model,
+			MaxTokens:   cfg.LLM.MaxTokens,
+			Temperature: cfg.LLM.Temperature,
+			Commits:     commits,
+			Diff:        diff,
+		}, out)
+		if err != nil {
+			return fmt.Errorf("review stream failed: %w", err)
+		}
+		// Risk header printed after [DONE] — body already written to stdout by Stream.
+		fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLine(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic))
+		if cache != nil && cacheKey != "" {
+			if err := cache.Put(cacheKey, resp); err != nil {
+				slog.Debug("llm cache put failed", "err", err)
+			}
+		}
+		threshold := cfg.Policy.FailOn
+		if threshold != "" && threshold != "never" && llm.RiskAtLeast(resp.Risk.Level, threshold) {
+			return &failError{level: resp.Risk.Level, threshold: threshold}
+		}
+		return nil
 	}
 
 	slog.Debug("requesting review", "commits", len(commits), "diff_bytes", len(diff), "offline", cfg.OfflineMode())

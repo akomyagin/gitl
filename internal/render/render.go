@@ -149,6 +149,17 @@ func riskHeader(art Artifact) string {
 	return h
 }
 
+// RiskHeaderLine returns the formatted risk header line for the given risk
+// fields. Used by the streaming path, which renders the header after [DONE]
+// rather than through the full Artifact renderer.
+func RiskHeaderLine(level, summary string, heuristic bool) string {
+	return riskHeader(Artifact{
+		RiskLevel:     level,
+		RiskSummary:   summary,
+		RiskHeuristic: heuristic,
+	})
+}
+
 // renderMarkdown prepends the risk header to the review body.
 func renderMarkdown(w io.Writer, art Artifact) error {
 	body := strings.TrimRight(art.ReviewMarkdown, "\n")
