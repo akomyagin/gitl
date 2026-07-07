@@ -16,9 +16,11 @@ A clean CLI binary plus a GitHub Action wrapper — no server, no database, no h
 storage. **BYOK** (bring your own key) with multi-provider support: OpenAI-compatible API,
 Ollama (local/self-hosted), Azure OpenAI. No telemetry.
 
-> **Status:** all three commands (`review`/`changelog`/`digest`) work on real repositories
-> with all three output formats (`md|text|json`). The Action posts AI reviews as PR comments
-> and gates on risk score. Signed releases and Marketplace listing are coming next.
+> **Status:** MVP complete. All three commands (`review`/`changelog`/`digest`) work on real
+> repositories with all three output formats (`md|text|json`). The Action posts AI reviews as
+> sticky PR comments and gates on risk score. `v0.1.0` ships cross-compiled, cosign-signed
+> release binaries (see [VERIFY.md](VERIFY.md) for verification). Marketplace listing is the
+> remaining manual step.
 
 ## Quick start
 
