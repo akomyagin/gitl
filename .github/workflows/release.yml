@@ -35,7 +35,7 @@ jobs:
       - name: Verify action.yml version pin
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          DEFAULT=$(grep -A5 'gitl-version:' action.yml | grep 'default:' | head -1 \
+          DEFAULT=$(grep -A15 'gitl-version:' action.yml | grep 'default:' | head -1 \
             | sed 's/.*default: *//; s/"//g; s/[[:space:]]//g')
           if [ "$DEFAULT" != "$TAG" ]; then
             printf 'ERROR: action.yml inputs.gitl-version.default="%s" does not match release tag "%s"\n' "$DEFAULT" "$TAG"
