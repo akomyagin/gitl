@@ -18,7 +18,7 @@ Ollama (local/self-hosted), Azure OpenAI. No telemetry.
 
 > **Status:** MVP complete. All three commands (`review`/`changelog`/`digest`) work on real
 > repositories with all three output formats (`md|text|json`). The Action posts AI reviews as
-> sticky PR comments and gates on risk score. `v0.1.0` ships cross-compiled, cosign-signed
+> sticky PR comments and gates on risk score. `v0.2.0` ships cross-compiled, cosign-signed
 > release binaries (see [VERIFY.md](VERIFY.md) for verification). Marketplace listing is the
 > remaining manual step.
 
@@ -82,6 +82,10 @@ Two levels, merged by priority:
 The repo-level `.gitl.yaml` is committed as a shared team policy (risk threshold, excluded
 paths, changelog categories). Without a key, `gitl` runs in deterministic offline mode.
 
+In offline mode — or when a real model omits a valid risk block and `gitl` falls back to
+the heuristic — the risk header is annotated with `*(heuristic)*` (and `"heuristic": true`
+in `--format=json`), so a deterministic score is never mistaken for a model's own judgement.
+
 ### Providers (`llm.provider`)
 
 ```yaml
@@ -134,7 +138,7 @@ jobs:
         with:
           fetch-depth: 0    # required: without full history base..head won't resolve
 
-      - uses: akomyagin/gitl@v0.1.0
+      - uses: akomyagin/gitl@v0.2.0
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, see below
           fail-on: high                               # optional: block merge on high risk
