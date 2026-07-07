@@ -1,14 +1,17 @@
 // Package prompt builds LLM prompts from git history.
 //
-// It ships a single hardcoded review template as plain Go strings — one
-// template does not justify //go:embed or text/template machinery. Custom
-// user templates (text/template) are post-MVP. The template requires the model
-// to end with a fenced `risk` JSON block (§7.1), parsed back in internal/llm.
+// The default review system prompt is embedded from templates/review_system.tmpl
+// (byte-identical to the historical hardcoded string). Custom user templates
+// (text/template) can override it via BuildReviewWithTemplate (Item 3). The
+// template requires the model to end with a fenced `risk` JSON block (§7.1),
+// parsed back in internal/llm.
 package prompt
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
+	"text/template"
 
 	"github.com/akomyagin/gitl/internal/gitlog"
 )
@@ -20,26 +23,41 @@ type Review struct {
 	Diff    string
 }
 
-// reviewSystem is the hardcoded system prompt for `gitl review`. The trailing
-// risk block (item 4) is the machine-readable score parsed by internal/llm
-// (§7.1); it must be the very last thing the model emits.
-const reviewSystem = "You are an experienced senior software engineer performing a code review of a git commit range.\n" +
-	"\n" +
-	"Write a concise, structured review in Markdown with these sections:\n" +
-	"1. \"## Summary\" — what this range does overall, 2-4 sentences.\n" +
-	"2. \"## Notable changes\" — bullet list of the most important changes.\n" +
-	"3. \"## Concerns\" — potential bugs, design issues, missing tests, security-sensitive spots. Be specific: reference files and hunks. If there are none, say so explicitly.\n" +
-	"4. End your answer with a separate fenced code block using the language `risk`, containing exactly one single-line JSON object, and this must be the very last thing you output:\n" +
-	"   ```risk\n" +
-	"   {\"level\": \"low|medium|high\", \"summary\": \"<one sentence, up to 140 characters>\"}\n" +
-	"   ```\n" +
-	"\n" +
-	"Ground every statement in the commits and diff you are given. Ignore pure formatting churn (whitespace, generated/lock files). Do not invent changes that are not in the diff."
-
 // BuildReview renders the system and user messages for a review. The user
 // message carries the commit metadata (subjects, authors, bodies, file lists)
-// followed by the full unified diff in a fenced block.
+// followed by the full unified diff in a fenced block. It uses the embedded
+// default system prompt (equivalent to BuildReviewWithTemplate(r, "")).
 func BuildReview(r Review) (system, user string) {
+	return defaultReviewSystem, buildUserMessage(r)
+}
+
+// BuildReviewWithTemplate renders the system prompt from a custom template file.
+// If systemTemplateFile is empty, the embedded default is used (identical to
+// BuildReview). Otherwise the file is parsed as a text/template and executed
+// with the Review as data (fields Range, Commits, Diff). The user message is
+// built identically in both cases.
+func BuildReviewWithTemplate(r Review, systemTemplateFile string) (system, user string, err error) {
+	user = buildUserMessage(r)
+	if systemTemplateFile == "" {
+		return defaultReviewSystem, user, nil
+	}
+	tmpl, err := template.ParseFiles(systemTemplateFile)
+	if err != nil {
+		return "", "", fmt.Errorf("parse system template %q: %w", systemTemplateFile, err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, r); err != nil {
+		return "", "", fmt.Errorf("execute system template %q: %w", systemTemplateFile, err)
+	}
+	if buf.Len() == 0 {
+		return "", "", fmt.Errorf("system template %q produced empty output — ensure the template has content outside {{define}} blocks", systemTemplateFile)
+	}
+	return buf.String(), user, nil
+}
+
+// buildUserMessage assembles the user message shared by BuildReview and
+// BuildReviewWithTemplate: commit metadata followed by the fenced unified diff.
+func buildUserMessage(r Review) string {
 	var b strings.Builder
 
 	fmt.Fprintf(&b, "Review the git range `%s` (%d commit(s)).\n\n", r.Range, len(r.Commits))
@@ -78,7 +96,7 @@ func BuildReview(r Review) (system, user string) {
 		b.WriteString("\n```\n")
 	}
 
-	return reviewSystem, b.String()
+	return b.String()
 }
 
 func shortHash(h string) string {

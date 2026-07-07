@@ -1,0 +1,3 @@
+**Risk:** {{.RiskLevel | upper}}{{if .RiskSummary}} — {{.RiskSummary}}{{end}}{{if .RiskHeuristic}} *(heuristic)*{{end}}
+
+{{.ReviewMarkdown | trimTrailingNewlines}}

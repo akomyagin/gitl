@@ -1,6 +1,8 @@
 package prompt
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -65,5 +67,53 @@ func TestBuildReviewEmpty(t *testing.T) {
 	}
 	if !strings.Contains(user, "empty diff") {
 		t.Errorf("expected empty-diff notice, got:\n%s", user)
+	}
+}
+
+// TestBuildReviewWithTemplateEmpty: an empty path yields output identical to
+// BuildReview (embedded default system prompt, same user message).
+func TestBuildReviewWithTemplateEmpty(t *testing.T) {
+	t.Parallel()
+	wantSystem, wantUser := BuildReview(sampleReview())
+	system, user, err := BuildReviewWithTemplate(sampleReview(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if system != wantSystem {
+		t.Errorf("system differs from BuildReview:\ngot:  %q\nwant: %q", system, wantSystem)
+	}
+	if user != wantUser {
+		t.Errorf("user differs from BuildReview:\ngot:  %q\nwant: %q", user, wantUser)
+	}
+}
+
+// TestBuildReviewWithTemplateCustom: a custom template file has its {{.Range}}
+// placeholder substituted, and the user message is still the standard one.
+func TestBuildReviewWithTemplateCustom(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "system.tmpl")
+	if err := os.WriteFile(path, []byte("Custom reviewer for range {{.Range}}."), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	system, user, err := BuildReviewWithTemplate(sampleReview(), path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if want := "Custom reviewer for range HEAD~1..HEAD."; system != want {
+		t.Errorf("system not rendered:\ngot:  %q\nwant: %q", system, want)
+	}
+	if !strings.Contains(user, "feat: thing") {
+		t.Errorf("user message not built as usual:\n%s", user)
+	}
+}
+
+// TestBuildReviewWithTemplateMissing: a non-existent path returns an error from
+// template.ParseFiles (config.validate() catches this earlier in normal flow).
+func TestBuildReviewWithTemplateMissing(t *testing.T) {
+	t.Parallel()
+	_, _, err := BuildReviewWithTemplate(sampleReview(), filepath.Join(t.TempDir(), "nope.tmpl"))
+	if err == nil {
+		t.Fatal("expected error for missing template file, got nil")
 	}
 }

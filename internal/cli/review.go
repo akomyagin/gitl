@@ -96,11 +96,21 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 	diff := filterDiffByGlobs(rawDiff, excludeGlobs)
 	diff = truncateDiff(diff, cfg.Diff.MaxDiffBytes)
 
-	system, user := prompt.BuildReview(prompt.Review{
+	// Custom prompt templates apply only when calling a real provider; the
+	// offline provider ignores the system prompt, so pass an empty path in
+	// offline mode to keep behavior deterministic.
+	systemTemplateFile := cfg.Prompt.SystemTemplateFile
+	if cfg.OfflineMode() {
+		systemTemplateFile = ""
+	}
+	system, user, err := prompt.BuildReviewWithTemplate(prompt.Review{
 		Range:   revRange,
 		Commits: commits,
 		Diff:    diff,
-	})
+	}, systemTemplateFile)
+	if err != nil {
+		return fmt.Errorf("prompt template: %w", err)
+	}
 
 	// --dry-run: print the estimate, no network call, exit 0.
 	if dryRun {
@@ -135,7 +145,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 	}
 
 	art := buildArtifact(cfg, revRange, commits, diff, resp)
-	if err := render.Render(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format)); err != nil {
+	if err := render.RenderWithTemplate(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
 		return err
 	}
 
@@ -161,11 +171,11 @@ func buildArtifact(cfg *config.Config, revRange string, commits []gitlog.Commit,
 		})
 	}
 	return render.Artifact{
-		GeneratedAt: time.Now().UTC(),
-		Range:       revRange,
-		Offline:     cfg.OfflineMode(),
-		Provider:    cfg.LLM.Provider,
-		Model:       cfg.LLM.Model,
+		GeneratedAt:   time.Now().UTC(),
+		Range:         revRange,
+		Offline:       cfg.OfflineMode(),
+		Provider:      cfg.LLM.Provider,
+		Model:         cfg.LLM.Model,
 		RiskLevel:     resp.Risk.Level,
 		RiskSummary:   resp.Risk.Summary,
 		RiskHeuristic: resp.Risk.Heuristic,

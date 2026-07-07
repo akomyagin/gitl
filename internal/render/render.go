@@ -8,10 +8,14 @@
 package render
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 )
 
@@ -38,14 +42,14 @@ type Artifact struct {
 	Offline     bool
 	Provider    string
 	Model       string
-	RiskLevel     string
-	RiskSummary   string
+	RiskLevel   string
+	RiskSummary string
 	// RiskHeuristic is true when RiskLevel/RiskSummary came from the deterministic
 	// heuristic rather than the model's own risk block (offline mode, or the model
 	// omitted a valid risk block). Surfaced in all three output formats.
 	RiskHeuristic bool
 	Stats         Stats
-	Commits     []Commit
+	Commits       []Commit
 	// ReviewMarkdown is the model's review body with the trailing risk block
 	// already stripped.
 	ReviewMarkdown string
@@ -79,6 +83,48 @@ func Render(w io.Writer, art Artifact, format Format) error {
 	default:
 		return fmt.Errorf("render: unknown output format %q (supported: md, text, json)", format)
 	}
+}
+
+// tmplFuncs are the helpers exposed to output templates (Item 3). Custom
+// templates use the same helpers the embedded default relies on.
+var tmplFuncs = template.FuncMap{
+	"upper":                strings.ToUpper,
+	"trimTrailingNewlines": func(s string) string { return strings.TrimRight(s, "\n") },
+}
+
+// RenderWithTemplate behaves like Render, but uses a custom text/template file
+// for the md format when outputTemplateFile is non-empty. For text/json,
+// outputTemplateFile is ignored (a warning is logged via slog.Warn when a path
+// was set, since it has no effect on those formats).
+func RenderWithTemplate(w io.Writer, art Artifact, format Format, outputTemplateFile string) error {
+	if format != FormatMarkdown && format != "" {
+		if outputTemplateFile != "" {
+			slog.Warn("output.template_file is ignored for non-markdown format", "format", string(format))
+		}
+		return Render(w, art, format)
+	}
+	if outputTemplateFile == "" {
+		return Render(w, art, format)
+	}
+	name := filepath.Base(outputTemplateFile)
+	tmpl, err := template.New(name).Funcs(tmplFuncs).ParseFiles(outputTemplateFile)
+	if err != nil {
+		return fmt.Errorf("parse output template %q: %w", outputTemplateFile, err)
+	}
+	// Buffer the output so that a mid-template error never leaves partial
+	// content on the caller's writer (e.g. stdout). Also catches the silent
+	// empty-output case produced by {{define}}-only templates.
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, art); err != nil {
+		return fmt.Errorf("execute output template %q: %w", outputTemplateFile, err)
+	}
+	if buf.Len() == 0 {
+		return fmt.Errorf("output template %q produced empty output — ensure the template has content outside {{define}} blocks", outputTemplateFile)
+	}
+	if _, err := io.Copy(w, &buf); err != nil {
+		return fmt.Errorf("write rendered output: %w", err)
+	}
+	return nil
 }
 
 // riskHeader returns the "**Risk:** LEVEL — summary" line (§7.4). Appends

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/template"
 	"time"
 
 	"github.com/spf13/pflag"
@@ -34,6 +35,15 @@ type Config struct {
 	Diff   DiffConfig   `mapstructure:"diff"`
 	Policy PolicyConfig `mapstructure:"policy"`
 	Digest DigestConfig `mapstructure:"digest"`
+	Prompt PromptConfig `mapstructure:"prompt"`
+}
+
+// PromptConfig holds custom prompt template overrides (Item 3). When
+// SystemTemplateFile is empty the embedded default review system prompt is used
+// (identical to prior behavior); otherwise it is parsed as a text/template and
+// executed with the review data.
+type PromptConfig struct {
+	SystemTemplateFile string `mapstructure:"system_template_file"`
 }
 
 // LLMConfig configures the LLM provider and request parameters.
@@ -79,6 +89,10 @@ type CostConfig struct {
 type OutputConfig struct {
 	Format string `mapstructure:"format"`
 	Color  bool   `mapstructure:"color"`
+	// TemplateFile is an optional custom text/template file for the md format
+	// (Item 3). Empty means the built-in Markdown rendering; it is ignored for
+	// the text/json formats.
+	TemplateFile string `mapstructure:"template_file"`
 }
 
 // DiffConfig bounds the diff sent to the LLM: max_diff_bytes is the truncation
@@ -129,23 +143,25 @@ type Options struct {
 // layer beneath the personal file, repo file, env, and flags.
 func defaults() map[string]any {
 	return map[string]any{
-		"llm.provider":             "openai",
-		"llm.api_key":              "",
-		"llm.base_url":             "https://api.openai.com/v1",
-		"llm.model":                "gpt-4o-mini",
-		"llm.max_tokens":           1500,
-		"llm.temperature":          0.2,
-		"llm.timeout_seconds":      60,
-		"llm.max_retries":          3,
-		"cost.max_cost_usd":        0.50,
-		"cost.warn_at_usd":         0.10,
-		"cost.price_per_1m_input":  0.0,
-		"cost.price_per_1m_output": 0.0,
-		"output.format":            "md",
-		"output.color":             true,
-		"diff.max_diff_bytes":      120000,
-		"diff.exclude_globs":       []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},
-		"policy.fail_on":           "never",
+		"llm.provider":                "openai",
+		"llm.api_key":                 "",
+		"llm.base_url":                "https://api.openai.com/v1",
+		"llm.model":                   "gpt-4o-mini",
+		"llm.max_tokens":              1500,
+		"llm.temperature":             0.2,
+		"llm.timeout_seconds":         60,
+		"llm.max_retries":             3,
+		"cost.max_cost_usd":           0.50,
+		"cost.warn_at_usd":            0.10,
+		"cost.price_per_1m_input":     0.0,
+		"cost.price_per_1m_output":    0.0,
+		"output.format":               "md",
+		"output.color":                true,
+		"output.template_file":        "",
+		"prompt.system_template_file": "",
+		"diff.max_diff_bytes":         120000,
+		"diff.exclude_globs":          []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},
+		"policy.fail_on":              "never",
 	}
 }
 
@@ -302,6 +318,50 @@ func (c *Config) validate() error {
 		return fmt.Errorf("policy.fail_on must be one of never|low|medium|high, got %q", c.Policy.FailOn)
 	}
 	c.Policy.FailOn = failOn
+
+	// Custom template overrides: when set, the file must exist and parse as a
+	// text/template so failures surface at config-load time rather than mid-review.
+	//
+	// System template validation is skipped in offline mode: runReview clears the
+	// path before use when offline, so an inaccessible file must not block a
+	// deterministic offline review.
+	if !c.OfflineMode() {
+		if err := validateTemplateFile("prompt.system_template_file", c.Prompt.SystemTemplateFile, nil); err != nil {
+			return err
+		}
+	}
+	if err := validateTemplateFile("output.template_file", c.Output.TemplateFile, outputTemplateFuncs); err != nil {
+		return err
+	}
+	return nil
+}
+
+// outputTemplateFuncs mirrors the FuncMap that render.RenderWithTemplate
+// registers so that output templates can be validated at config-load time with
+// the same function names available. Keep in sync with render.tmplFuncs.
+var outputTemplateFuncs = template.FuncMap{
+	"upper":                func(s string) string { return s },
+	"trimTrailingNewlines": func(s string) string { return s },
+}
+
+// validateTemplateFile checks that a configured template path (if non-empty)
+// exists and parses as a text/template. funcs (if non-nil) are registered
+// before parsing so templates using custom functions are not rejected. key is
+// used only for error messages.
+func validateTemplateFile(key, path string, funcs template.FuncMap) error {
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("%s: cannot access template file %q: %w", key, path, err)
+	}
+	tmpl := template.New(filepath.Base(path))
+	if len(funcs) > 0 {
+		tmpl = tmpl.Funcs(funcs)
+	}
+	if _, err := tmpl.ParseFiles(path); err != nil {
+		return fmt.Errorf("%s: invalid template file %q: %w", key, path, err)
+	}
 	return nil
 }
 
