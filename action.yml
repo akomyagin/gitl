@@ -1,7 +1,5 @@
 name: "gitl review"
-description: >-
-  AI review of a pull request's commits with a machine-readable risk score
-  (low|medium|high), posted as a PR comment. See docs/TECHNICAL_PLAN.md §12.
+description: "AI review of git commits with risk scoring (low|medium|high). Sticky PR comment, CI gating. BYOK: OpenAI, Ollama, Azure."
 branding:
   icon: "git-commit"
   color: "purple"
