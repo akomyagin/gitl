@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"strings"
 	"testing"
 
@@ -102,6 +103,29 @@ func TestBuildArtifactStats(t *testing.T) {
 	var b strings.Builder
 	if err := render.Render(&b, art, render.FormatJSON); err != nil {
 		t.Fatalf("render json: %v", err)
+	}
+}
+
+func TestByteCountWriter(t *testing.T) {
+	t.Parallel()
+	var buf strings.Builder
+	cw := &byteCountWriter{w: &buf}
+	if cw.written != 0 {
+		t.Fatalf("initial written = %d, want 0", cw.written)
+	}
+	n, err := io.WriteString(cw, "hello")
+	if err != nil || n != 5 {
+		t.Fatalf("first WriteString: n=%d err=%v", n, err)
+	}
+	if cw.written != 5 {
+		t.Errorf("written after first write = %d, want 5", cw.written)
+	}
+	_, _ = io.WriteString(cw, " world")
+	if cw.written != 11 {
+		t.Errorf("written after second write = %d, want 11", cw.written)
+	}
+	if buf.String() != "hello world" {
+		t.Errorf("buf = %q, want %q", buf.String(), "hello world")
 	}
 }
 

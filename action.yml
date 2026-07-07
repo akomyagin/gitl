@@ -39,7 +39,7 @@ inputs:
       pins it to the commit SHA under test, to exercise in-progress code
       before a tag exists).
     required: false
-    default: "v0.3.0"
+    default: "v0.3.1"
   base-sha:
     description: >-
       Base SHA of the range to review. If left empty, falls back to the
