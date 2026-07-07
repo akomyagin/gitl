@@ -110,14 +110,28 @@ runs:
           --max-cost-usd="$GITL_MAX_COST_USD" \
           > review.json || review_exit=$?
 
-        {
-          echo "<!-- gitl-review -->"
-          echo "## gitl review \`$GITL_RANGE\`"
-          echo
-          jq -r '"**Risk:** " + (.risk.level | ascii_upcase) + " — " + .risk.summary' review.json
-          echo
-          jq -r '.review_markdown' review.json
-        } > comment.md
+        # Build the PR comment. If review.json is valid JSON, render the full
+        # review. Otherwise gitl itself failed (bad range, provider error,
+        # cost-guard) — post a fallback notice so the PR isn't left silent,
+        # satisfying §12.4.Б's "show reasoning before failing" principle even
+        # on the tool-error path (not only on the risk-gate path).
+        if jq -e . review.json > /dev/null 2>&1; then
+          {
+            echo "<!-- gitl-review -->"
+            echo "## gitl review \`$GITL_RANGE\`"
+            echo
+            jq -r '"**Risk:** " + (.risk.level | ascii_upcase) + " — " + .risk.summary + (if .risk.heuristic then " *(heuristic)*" else "" end)' review.json
+            echo
+            jq -r '.review_markdown' review.json
+          } > comment.md
+        else
+          {
+            echo "<!-- gitl-review -->"
+            echo "## gitl review \`$GITL_RANGE\`"
+            echo
+            echo ":warning: **gitl exited with an error (exit \`${review_exit}\`)** — no review output was produced. Check the [workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) for details."
+          } > comment.md
+        fi
 
         # Post the review BEFORE propagating the risk-gate exit code, so a
         # blocked (high-risk) PR still shows the reasoning, not just a bare

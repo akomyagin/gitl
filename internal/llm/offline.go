@@ -40,10 +40,9 @@ func (o *Offline) Complete(ctx context.Context, _ Request) (Response, error) {
 	if err := ctx.Err(); err != nil {
 		return Response{}, err
 	}
-	return Response{
-		Content: o.render(),
-		Risk:    HeuristicRisk(o.commits, o.diff),
-	}, nil
+	risk := HeuristicRisk(o.commits, o.diff)
+	risk.Heuristic = true
+	return Response{Content: o.render(), Risk: risk}, nil
 }
 
 // render builds the Markdown summary. It is pure and deterministic.
