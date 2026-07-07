@@ -15,6 +15,8 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
@@ -36,3 +38,21 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Compute artifact hashes
+        id: hash
+        run: |
+          cd dist
+          echo "hashes=$(sha256sum gitl_*.tar.gz gitl_*.zip checksums.txt | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    needs: [release]
+    permissions:
+      actions: read    # read workflow run for provenance metadata
+      id-token: write  # OIDC token for keyless signing
+      contents: write  # upload provenance to the release
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    with:
+      base64-subjects: ${{ needs.release.outputs.hashes }}
+      upload-assets: true

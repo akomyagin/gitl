@@ -55,3 +55,28 @@ as missing — that is expected. If any file prints `FAILED`, do **not** use it.
 
 On macOS, `sha256sum` may not be installed; use `shasum -a 256 -c checksums.txt`
 instead, or install GNU coreutils.
+
+## 3. Verify SLSA L3 provenance
+
+Starting with `v0.3.0`, each release also ships a SLSA Level 3 provenance
+attestation (`*.intoto.jsonl`) alongside the cosign signature. It proves the
+binary was produced by this repository's release workflow under SLSA L3
+guarantees (isolated build, non-forgeable provenance).
+
+Install [`slsa-verifier`](https://github.com/slsa-framework/slsa-verifier/releases)
+and run:
+
+```bash
+slsa-verifier verify-artifact gitl_<ver>_linux_amd64.tar.gz \
+  --provenance-path gitl-v<ver>.intoto.jsonl \
+  --source-uri github.com/akomyagin/gitl \
+  --source-tag v<ver>
+```
+
+Replace `<ver>` with the release tag (e.g. `v0.3.0`) and the platform suffix with
+the one you downloaded. The provenance file (`gitl-v<ver>.intoto.jsonl`) is a single
+attestation covering all release artifacts — download it once alongside any binary you
+want to verify. A successful run prints `PASSED: SLSA verification passed`.
+
+Both cosign (sections 1–2) and SLSA provenance (section 3) are independent; you
+can use either or both to verify a release.
