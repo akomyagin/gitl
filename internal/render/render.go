@@ -38,9 +38,13 @@ type Artifact struct {
 	Offline     bool
 	Provider    string
 	Model       string
-	RiskLevel   string
-	RiskSummary string
-	Stats       Stats
+	RiskLevel     string
+	RiskSummary   string
+	// RiskHeuristic is true when RiskLevel/RiskSummary came from the deterministic
+	// heuristic rather than the model's own risk block (offline mode, or the model
+	// omitted a valid risk block). Surfaced in all three output formats.
+	RiskHeuristic bool
+	Stats         Stats
 	Commits     []Commit
 	// ReviewMarkdown is the model's review body with the trailing risk block
 	// already stripped.
@@ -77,13 +81,21 @@ func Render(w io.Writer, art Artifact, format Format) error {
 	}
 }
 
-// riskHeader returns the "**Risk:** LEVEL — summary" line (§7.4).
+// riskHeader returns the "**Risk:** LEVEL — summary" line (§7.4). Appends
+// "*(heuristic)*" when the score was computed by the deterministic fallback
+// rather than the model, so users can distinguish the two.
 func riskHeader(art Artifact) string {
 	level := strings.ToUpper(art.RiskLevel)
-	if art.RiskSummary == "" {
-		return fmt.Sprintf("**Risk:** %s", level)
+	var h string
+	if art.RiskSummary != "" {
+		h = fmt.Sprintf("**Risk:** %s — %s", level, art.RiskSummary)
+	} else {
+		h = fmt.Sprintf("**Risk:** %s", level)
 	}
-	return fmt.Sprintf("**Risk:** %s — %s", level, art.RiskSummary)
+	if art.RiskHeuristic {
+		h += " *(heuristic)*"
+	}
+	return h
 }
 
 // renderMarkdown prepends the risk header to the review body.
@@ -144,8 +156,9 @@ type jsonArtifact struct {
 }
 
 type jsonRisk struct {
-	Level   string `json:"level"`
-	Summary string `json:"summary"`
+	Level     string `json:"level"`
+	Summary   string `json:"summary"`
+	Heuristic bool   `json:"heuristic"`
 }
 
 type jsonStats struct {
@@ -182,7 +195,7 @@ func renderJSON(w io.Writer, art Artifact) error {
 		Offline:       art.Offline,
 		Provider:      art.Provider,
 		Model:         art.Model,
-		Risk:          jsonRisk{Level: art.RiskLevel, Summary: art.RiskSummary},
+		Risk:          jsonRisk{Level: art.RiskLevel, Summary: art.RiskSummary, Heuristic: art.RiskHeuristic},
 		Stats: jsonStats{
 			Commits:      art.Stats.Commits,
 			FilesChanged: art.Stats.FilesChanged,

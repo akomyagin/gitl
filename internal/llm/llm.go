@@ -43,9 +43,13 @@ type Request struct {
 
 // Risk is the structured risk score attached to a review (§7). Level is one of
 // "low", "medium", "high"; Summary is a one-sentence explanation.
+// Heuristic is true when the score was computed by the deterministic fallback
+// (offline mode, or the model omitted a valid risk block) rather than parsed
+// from the model's own fenced risk block.
 type Risk struct {
-	Level   string
-	Summary string
+	Level     string
+	Summary   string
+	Heuristic bool
 }
 
 // Response is a provider-agnostic completion response.

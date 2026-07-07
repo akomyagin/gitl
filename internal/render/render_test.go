@@ -109,6 +109,9 @@ func TestRenderJSONSchema(t *testing.T) {
 	if risk["level"] != "medium" || risk["summary"] != "Touches auth middleware without new tests." {
 		t.Errorf("risk = %v", risk)
 	}
+	if risk["heuristic"] != false {
+		t.Errorf("risk.heuristic = %v, want false", risk["heuristic"])
+	}
 
 	stats, ok := m["stats"].(map[string]any)
 	if !ok {
@@ -141,5 +144,42 @@ func TestRenderUnknownFormat(t *testing.T) {
 	var b strings.Builder
 	if err := Render(&b, sampleArtifact(), Format("xml")); err == nil {
 		t.Error("expected error for unknown format")
+	}
+}
+
+func TestRenderHeuristicAnnotation(t *testing.T) {
+	art := sampleArtifact()
+	art.RiskHeuristic = true
+
+	// Markdown: risk header must carry "*(heuristic)*".
+	var md strings.Builder
+	if err := Render(&md, art, FormatMarkdown); err != nil {
+		t.Fatalf("Render md: %v", err)
+	}
+	if !strings.Contains(md.String(), "*(heuristic)*") {
+		t.Errorf("markdown missing heuristic annotation:\n%s", md.String())
+	}
+
+	// Text: strip removes * but "heuristic" word must still be present.
+	var txt strings.Builder
+	if err := Render(&txt, art, FormatText); err != nil {
+		t.Fatalf("Render text: %v", err)
+	}
+	if !strings.Contains(txt.String(), "heuristic") {
+		t.Errorf("text output missing heuristic annotation:\n%s", txt.String())
+	}
+
+	// JSON: risk.heuristic must be true.
+	var js strings.Builder
+	if err := Render(&js, art, FormatJSON); err != nil {
+		t.Fatalf("Render json: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(js.String()), &m); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
+	risk := m["risk"].(map[string]any)
+	if risk["heuristic"] != true {
+		t.Errorf("risk.heuristic = %v, want true", risk["heuristic"])
 	}
 }

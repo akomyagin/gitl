@@ -220,6 +220,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 	stripped, risk, ok := ParseRisk(content)
 	if !ok {
 		risk = HeuristicRisk(req.Commits, req.Diff)
+		risk.Heuristic = true
 		slog.Warn("model risk block missing or invalid; using heuristic fallback", "level", risk.Level)
 		stripped = strings.TrimRight(content, " \t\r\n") + "\n"
 	}
