@@ -56,3 +56,7 @@ jobs:
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}
       upload-assets: true
+      # compile-generator builds the SLSA generator binary from Go source on the
+      # runner instead of downloading a pre-compiled binary, avoiding glibc
+      # compatibility failures on ubuntu-24.04 runners.
+      compile-generator: true
