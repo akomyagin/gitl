@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"path"
 	"strings"
@@ -29,6 +30,20 @@ type failError struct {
 
 func (e *failError) Error() string {
 	return fmt.Sprintf("review risk %q meets --fail-on=%s threshold", e.level, e.threshold)
+}
+
+// byteCountWriter wraps an io.Writer and tracks how many bytes have been
+// written. The streaming branch uses it to detect pre-first-token failures
+// so it can safely fall back to the non-streaming Complete path.
+type byteCountWriter struct {
+	w       io.Writer
+	written int64
+}
+
+func (c *byteCountWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.written += int64(n)
+	return n, err
 }
 
 // newReviewCmd builds the `gitl review <range>` command.
@@ -166,9 +181,12 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 	// Streaming branch (Item 1): stream tokens to a terminal for md/text output.
 	// The body is written directly by Stream; only the risk header is appended
 	// afterward, so the full Artifact renderer is NOT invoked here.
+	// If Stream fails before writing any bytes (e.g. 429/503 before the first
+	// token), we fall through to the buffered Complete path below (§7.2/§8).
 	if s, ok := provider.(llm.Streamer); ok && wantStream(cmd, cfg) {
 		out := cmd.OutOrStdout()
-		resp, err := s.Stream(ctx, llm.Request{
+		cw := &byteCountWriter{w: out}
+		resp, streamErr := s.Stream(ctx, llm.Request{
 			System:      system,
 			User:        user,
 			Model:       cfg.LLM.Model,
@@ -176,22 +194,27 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 			Temperature: cfg.LLM.Temperature,
 			Commits:     commits,
 			Diff:        diff,
-		}, out)
-		if err != nil {
-			return fmt.Errorf("review stream failed: %w", err)
-		}
-		// Risk header printed after [DONE] — body already written to stdout by Stream.
-		fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLine(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic))
-		if cache != nil && cacheKey != "" {
-			if err := cache.Put(cacheKey, resp); err != nil {
-				slog.Debug("llm cache put failed", "err", err)
+		}, cw)
+		if streamErr == nil {
+			// Risk header printed after [DONE] — body already written by Stream.
+			fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLine(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic))
+			if cache != nil && cacheKey != "" {
+				if err := cache.Put(cacheKey, resp); err != nil {
+					slog.Debug("llm cache put failed", "err", err)
+				}
 			}
+			threshold := cfg.Policy.FailOn
+			if threshold != "" && threshold != "never" && llm.RiskAtLeast(resp.Risk.Level, threshold) {
+				return &failError{level: resp.Risk.Level, threshold: threshold}
+			}
+			return nil
 		}
-		threshold := cfg.Policy.FailOn
-		if threshold != "" && threshold != "never" && llm.RiskAtLeast(resp.Risk.Level, threshold) {
-			return &failError{level: resp.Risk.Level, threshold: threshold}
+		if cw.written > 0 {
+			// Tokens already reached the terminal — partial output can't be undone.
+			return fmt.Errorf("review stream failed: %w", streamErr)
 		}
-		return nil
+		// Zero bytes written: safe to fall back to the buffered path.
+		slog.Info("streaming failed before first token, falling back to non-streaming", "err", streamErr)
 	}
 
 	slog.Debug("requesting review", "commits", len(commits), "diff_bytes", len(diff), "offline", cfg.OfflineMode())
