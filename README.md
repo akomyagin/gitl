@@ -19,8 +19,8 @@ Ollama (local/self-hosted), Azure OpenAI. No telemetry.
 > **Status:** MVP complete. All three commands (`review`/`changelog`/`digest`) work on real
 > repositories with all three output formats (`md|text|json`). The Action posts AI reviews as
 > sticky PR comments and gates on risk score. `v0.2.0` ships cross-compiled, cosign-signed
-> release binaries (see [VERIFY.md](VERIFY.md) for verification). Marketplace listing is the
-> remaining manual step.
+> release binaries; `v0.3.0` adds SLSA L3 build provenance alongside cosign signatures
+> (see [VERIFY.md](VERIFY.md) for verification). Marketplace listing is the remaining manual step.
 
 ## Quick start
 
