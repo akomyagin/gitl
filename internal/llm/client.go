@@ -274,7 +274,7 @@ func (c *Client) doOnce(ctx context.Context, body []byte) (string, error) {
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
 	if err != nil {
 		return "", fmt.Errorf("llm: read response: %w", err)
 	}
@@ -316,8 +316,9 @@ func isRetryable(err error) bool {
 // backoffBase is the base delay for exponential backoff; attempt N sleeps
 // roughly backoffBase * 2^(N-1) plus jitter, capped at backoffMax.
 const (
-	backoffBase = 200 * time.Millisecond
-	backoffMax  = 10 * time.Second
+	backoffBase      = 200 * time.Millisecond
+	backoffMax       = 10 * time.Second
+	maxResponseBytes = 8 << 20 // 8 MiB cap on LLM response bodies
 )
 
 // sleepWithBackoff sleeps for an exponentially-growing, jittered duration

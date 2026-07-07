@@ -21,8 +21,9 @@ func resolvePricing(cmd *cobra.Command, cfg *config.Config) (pricing llm.Pricing
 		return llm.Pricing{}, true
 	}
 
-	// Explicit config override wins unconditionally.
-	if cfg.Cost.PricePer1MInput > 0 || cfg.Cost.PricePer1MOutput > 0 {
+	// Explicit config override wins only when both sides are set; a one-sided
+	// override would zero the other half of the estimate, silently under-reporting.
+	if cfg.Cost.PricePer1MInput > 0 && cfg.Cost.PricePer1MOutput > 0 {
 		return llm.Pricing{
 			InputPer1M:  cfg.Cost.PricePer1MInput,
 			OutputPer1M: cfg.Cost.PricePer1MOutput,

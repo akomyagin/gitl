@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -279,13 +280,13 @@ func parseDiffGitPath(section string) string {
 	if nl != -1 {
 		header = section[:nl]
 	}
-	// header looks like "a/path b/path"; take the b/ side.
-	fields := strings.Fields(header)
-	if len(fields) < 2 {
+	// header is "a/OLDPATH b/NEWPATH"; both sides can contain spaces.
+	// Find the last " b/" to correctly split the b-side even for paths with spaces.
+	idx := strings.LastIndex(header, " b/")
+	if idx < 0 {
 		return ""
 	}
-	bSide := fields[len(fields)-1]
-	return strings.TrimPrefix(bSide, "b/")
+	return header[idx+3:]
 }
 
 // truncateDiff caps the diff at maxBytes with an explicit marker (§6). A
@@ -295,5 +296,10 @@ func truncateDiff(diff string, maxBytes int) string {
 		return diff
 	}
 	slog.Warn("diff exceeds max_diff_bytes; truncating", "bytes", len(diff), "limit", maxBytes)
+	// Align the cut to a valid UTF-8 rune boundary so the result is never a
+	// malformed string (multi-byte runes must not be split mid-sequence).
+	for maxBytes > 0 && !utf8.RuneStart(diff[maxBytes]) {
+		maxBytes--
+	}
 	return diff[:maxBytes] + "\n[... diff truncated ...]\n"
 }

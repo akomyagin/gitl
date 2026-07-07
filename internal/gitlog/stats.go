@@ -31,3 +31,14 @@ func ChangedFileCount(commits []Commit) int {
 	}
 	return len(seen)
 }
+
+// DiffFileCount counts the number of distinct files in a unified diff by
+// counting "diff --git " headers. Used by HeuristicRisk so it scores the
+// already glob-filtered diff, not the unfiltered commit file list.
+func DiffFileCount(diff string) int {
+	n := strings.Count(diff, "\ndiff --git ")
+	if strings.HasPrefix(diff, "diff --git ") {
+		n++
+	}
+	return n
+}
