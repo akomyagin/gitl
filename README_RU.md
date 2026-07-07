@@ -63,7 +63,7 @@ go test ./...
 Установка:
 
 ```bash
-go install github.com/akomyagin/gitl/cmd/gitl@main
+go install github.com/akomyagin/gitl/cmd/gitl@latest
 ```
 
 ### Локальный тест мультипровайдерности (Ollama)

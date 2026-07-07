@@ -123,6 +123,21 @@ runs:
         # blocked (high-risk) PR still shows the reasoning, not just a bare
         # "job failed" (docs/TECHNICAL_PLAN.md §12.4.Б, same "show reasoning
         # before failing" principle as `gitl review --fail-on` itself).
-        gh pr comment "$GITL_PR_NUMBER" --body-file comment.md
+        #
+        # Sticky comment: if a previous gitl-review comment exists (matched by
+        # the "<!-- gitl-review -->" marker), edit it in place instead of
+        # posting a new one, so force-pushes don't spam the PR thread. The
+        # marker is the first line of comment.md, so a startswith() match is
+        # enough. GITHUB_REPOSITORY is provided by the runner (owner/repo).
+        EXISTING_ID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments" \
+          --jq '[.[] | select(.body | startswith("<!-- gitl-review -->"))] | last | .id // empty')
+
+        if [ -n "$EXISTING_ID" ]; then
+          gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_ID}" \
+            --method PATCH \
+            --field body="$(cat comment.md)"
+        else
+          gh pr comment "$GITL_PR_NUMBER" --body-file comment.md
+        fi
 
         exit "$review_exit"

@@ -61,7 +61,7 @@ go test ./...
 Install:
 
 ```bash
-go install github.com/akomyagin/gitl/cmd/gitl@main
+go install github.com/akomyagin/gitl/cmd/gitl@latest
 ```
 
 ### Local multi-provider test (Ollama)
