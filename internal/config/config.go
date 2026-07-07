@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/viper"
 
 	"github.com/akomyagin/gitl/internal/llm"
+	"github.com/akomyagin/gitl/internal/render"
 )
 
 // Config is the fully merged, validated configuration for one gitl invocation.
@@ -330,18 +331,10 @@ func (c *Config) validate() error {
 			return err
 		}
 	}
-	if err := validateTemplateFile("output.template_file", c.Output.TemplateFile, outputTemplateFuncs); err != nil {
+	if err := validateTemplateFile("output.template_file", c.Output.TemplateFile, render.TemplateFuncs()); err != nil {
 		return err
 	}
 	return nil
-}
-
-// outputTemplateFuncs mirrors the FuncMap that render.RenderWithTemplate
-// registers so that output templates can be validated at config-load time with
-// the same function names available. Keep in sync with render.tmplFuncs.
-var outputTemplateFuncs = template.FuncMap{
-	"upper":                func(s string) string { return s },
-	"trimTrailingNewlines": func(s string) string { return s },
 }
 
 // validateTemplateFile checks that a configured template path (if non-empty)

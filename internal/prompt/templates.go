@@ -10,10 +10,12 @@ package prompt
 import (
 	"bytes"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"text/template"
 
 	"github.com/akomyagin/gitl/internal/gitlog"
+	"github.com/akomyagin/gitl/internal/render"
 )
 
 // Review is the input for building a review prompt.
@@ -41,7 +43,7 @@ func BuildReviewWithTemplate(r Review, systemTemplateFile string) (system, user 
 	if systemTemplateFile == "" {
 		return defaultReviewSystem, user, nil
 	}
-	tmpl, err := template.ParseFiles(systemTemplateFile)
+	tmpl, err := template.New(filepath.Base(systemTemplateFile)).Funcs(render.TemplateFuncs()).ParseFiles(systemTemplateFile)
 	if err != nil {
 		return "", "", fmt.Errorf("parse system template %q: %w", systemTemplateFile, err)
 	}
