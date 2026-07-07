@@ -54,6 +54,26 @@ signs:
     artifacts: checksum
     output: true
 
+brews:
+  - name: gitl
+    homepage: "https://github.com/akomyagin/gitl"
+    description: "AI review of git commits with risk scoring (low|medium|high). BYOK: OpenAI, Ollama, Azure."
+    license: "MIT"
+    repository:
+      owner: akomyagin
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    commit_author:
+      name: goreleaserbot
+      email: bot@goreleaser.com
+    commit_msg_template: "chore: brew formula update for {{ .ProjectName }} {{ .Tag }}"
+    directory: Formula
+    install: |
+      bin.install "gitl"
+    test: |
+      system "#{bin}/gitl", "version"
+
 changelog:
   use: github
 
