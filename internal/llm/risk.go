@@ -78,7 +78,7 @@ const (
 func HeuristicRisk(commits []gitlog.Commit, diff string) Risk {
 	added, removed := gitlog.DiffLineStats(diff)
 	changed := added + removed
-	files := gitlog.ChangedFileCount(commits)
+	files := gitlog.DiffFileCount(diff)
 	hits := sensitiveHits(commits, diff)
 
 	switch {
@@ -152,6 +152,14 @@ func quoteList(items []string) string {
 	return strings.Join(quoted, ", ")
 }
 
+// ValidFailOnLevel reports whether s is a recognised --fail-on value
+// (never | low | medium | high). It consults the same riskOrder map as
+// RiskAtLeast so config validation and comparison share one source of truth.
+func ValidFailOnLevel(s string) bool {
+	_, ok := riskOrder[s]
+	return ok
+}
+
 // fencedBlockRe matches a fenced code block, capturing its language tag and
 // body. It is tolerant of surrounding whitespace and multi-line bodies.
 var fencedBlockRe = regexp.MustCompile("(?s)```([a-zA-Z0-9_-]*)\\r?\\n(.*?)```")
@@ -163,19 +171,20 @@ type riskPayload struct {
 }
 
 // ParseRisk extracts the model's risk score from a review body (§7.2). It looks
-// for the LAST fenced block tagged `risk` (tolerantly also accepting a `json`
-// block whose object has a valid "level"), validates the level, and returns the
+// for the LAST fenced block tagged `risk`, validates the level, and returns the
 // review content with that block stripped. ok is false when no valid risk block
 // is found, in which case the caller should fall back to the heuristic; the
 // returned content is the original text with any partially-matched, invalid
-// risk/json blocks left intact (only a valid block is stripped).
+// risk blocks left intact (only a valid block is stripped).
+// Only ` ```risk ` blocks are accepted — ` ```json ` is not, to avoid
+// accidentally treating a generic JSON block as a risk payload.
 func ParseRisk(content string) (stripped string, risk Risk, ok bool) {
 	matches := fencedBlockRe.FindAllStringSubmatchIndex(content, -1)
 	// Iterate from the last block backward so the LAST valid risk block wins.
 	for i := len(matches) - 1; i >= 0; i-- {
 		m := matches[i]
 		lang := strings.ToLower(strings.TrimSpace(content[m[2]:m[3]]))
-		if lang != "risk" && lang != "json" {
+		if lang != "risk" {
 			continue
 		}
 		body := strings.TrimSpace(content[m[4]:m[5]])

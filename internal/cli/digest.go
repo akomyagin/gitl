@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -85,11 +86,17 @@ func resolveDigestRepos(cmd *cobra.Command, cfg *config.Config) ([]string, error
 	}
 	if cmd.Flags().Changed("repos") {
 		var paths []string
-		for _, p := range strings.Split(reposFlag, ",") {
-			p = strings.TrimSpace(p)
-			if p != "" {
-				paths = append(paths, p)
+		for _, raw := range strings.Split(reposFlag, ",") {
+			p := strings.TrimSpace(raw)
+			if p == "" {
+				continue
 			}
+			if !filepath.IsAbs(p) {
+				if abs, err := filepath.Abs(p); err == nil {
+					p = abs
+				}
+			}
+			paths = append(paths, p)
 		}
 		if len(paths) == 0 {
 			return nil, fmt.Errorf("--repos was set but contained no repository paths")
@@ -100,7 +107,13 @@ func resolveDigestRepos(cmd *cobra.Command, cfg *config.Config) ([]string, error
 	if len(cfg.Digest.Repos) > 0 {
 		paths := make([]string, 0, len(cfg.Digest.Repos))
 		for _, r := range cfg.Digest.Repos {
-			paths = append(paths, r.Path)
+			p := r.Path
+			if !filepath.IsAbs(p) {
+				if abs, err := filepath.Abs(p); err == nil {
+					p = abs
+				}
+			}
+			paths = append(paths, p)
 		}
 		return paths, nil
 	}

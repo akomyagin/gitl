@@ -22,6 +22,8 @@ import (
 
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+
+	"github.com/akomyagin/gitl/internal/llm"
 )
 
 // Config is the fully merged, validated configuration for one gitl invocation.
@@ -280,15 +282,6 @@ func bindChangedFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 	return bindErr
 }
 
-// validFailOnLevels are the only accepted policy.fail_on / --fail-on values.
-// A typo here must be a loud config error, not a silent misfire: an unknown
-// string falls through llm.RiskAtLeast's rank lookup as 0, which is BELOW
-// every real risk level, making "l >= t" true for any risk — i.e. an
-// unrecognized threshold would otherwise fail-gate on every review, the exact
-// opposite of the project's "default WARN, hard gate is explicit opt-in"
-// principle (§9).
-var validFailOnLevels = map[string]bool{"never": true, "low": true, "medium": true, "high": true}
-
 // validate checks invariants that must hold before the config is used. It also
 // normalizes policy.fail_on to lowercase so downstream comparisons don't need
 // to re-normalize.
@@ -303,7 +296,9 @@ func (c *Config) validate() error {
 	if failOn == "" {
 		failOn = "never"
 	}
-	if !validFailOnLevels[failOn] {
+	// validFailOnLevels is derived from llm.ValidFailOnLevel (single source of
+	// truth in the llm package) so config validation and comparison never diverge.
+	if !llm.ValidFailOnLevel(failOn) {
 		return fmt.Errorf("policy.fail_on must be one of never|low|medium|high, got %q", c.Policy.FailOn)
 	}
 	c.Policy.FailOn = failOn

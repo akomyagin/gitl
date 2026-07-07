@@ -27,6 +27,16 @@ func bigDiff(lines int) string {
 	return b.String()
 }
 
+// manyFileDiff builds a minimal unified diff with n distinct "diff --git" sections.
+func manyFileDiff(n int) string {
+	var b strings.Builder
+	for i := 0; i < n; i++ {
+		name := "pkg/file" + string(rune('a'+i%26)) + ".go"
+		b.WriteString("diff --git a/" + name + " b/" + name + "\n+line\n")
+	}
+	return b.String()
+}
+
 func TestHeuristicRisk(t *testing.T) {
 	t.Parallel()
 
@@ -57,7 +67,7 @@ func TestHeuristicRisk(t *testing.T) {
 		{
 			name:    "high: many files",
 			commits: commitsWith(manyFiles(21)...),
-			diff:    "+one\n",
+			diff:    manyFileDiff(21),
 			want:    RiskHigh,
 		},
 		{
@@ -115,10 +125,9 @@ func TestParseRisk(t *testing.T) {
 			wantLevel: "high",
 		},
 		{
-			name:      "tolerant json-tagged block",
-			content:   "prose\n\n```json\n{\"level\": \"low\", \"summary\": \"JSONTAG_MARKER\"}\n```",
-			wantOK:    true,
-			wantLevel: "low",
+			name:    "json-tagged block rejected",
+			content: "prose\n\n```json\n{\"level\": \"low\", \"summary\": \"JSONTAG_MARKER\"}\n```",
+			wantOK:  false,
 		},
 		{
 			name:    "missing block",
