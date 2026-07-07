@@ -68,13 +68,15 @@ and run:
 
 ```bash
 slsa-verifier verify-artifact gitl_<ver>_linux_amd64.tar.gz \
-  --provenance-path gitl_<ver>_linux_amd64.tar.gz.intoto.jsonl \
+  --provenance-path gitl-v<ver>.intoto.jsonl \
   --source-uri github.com/akomyagin/gitl \
   --source-tag v<ver>
 ```
 
 Replace `<ver>` with the release tag (e.g. `v0.3.0`) and the platform suffix with
-the one you downloaded. A successful run prints `PASSED: SLSA verification passed`.
+the one you downloaded. The provenance file (`gitl-v<ver>.intoto.jsonl`) is a single
+attestation covering all release artifacts — download it once alongside any binary you
+want to verify. A successful run prints `PASSED: SLSA verification passed`.
 
 Both cosign (sections 1–2) and SLSA provenance (section 3) are independent; you
 can use either or both to verify a release.

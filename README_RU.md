@@ -19,10 +19,10 @@ Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии
 > Статус: MVP завершён. Все три команды (`review`/`changelog`/`digest`) работают
 > на реальных репозиториях, все три формата вывода (`md|text|json`); ниже —
 > готовый Action, оставляющий AI-ревью sticky-комментарием к PR и гейтящий по
-> риск-скорингу. `v0.2.0` выпущен с кросс-компилированными, подписанными cosign
-> бинарями; `v0.3.0` добавляет SLSA L3 provenance рядом с cosign-подписями
-> (верификация — в [VERIFY.md](VERIFY.md)). Публикация в Marketplace —
-> оставшийся ручной шаг.
+> риск-скорингу. Последний выпущенный тег, `v0.2.1`, — кросс-компилированные,
+> подписанные cosign бинари. SLSA L3 provenance рядом с cosign-подписями реализован
+> в `main` и выйдет со следующим тегом, `v0.3.0` (верификация — в
+> [VERIFY.md](VERIFY.md)). Публикация в Marketplace — оставшийся ручной шаг.
 
 ## Быстрый старт
 
@@ -66,7 +66,13 @@ go test ./...
 Установка:
 
 ```bash
+# Go-тулчейн
 go install github.com/akomyagin/gitl/cmd/gitl@latest
+
+# Homebrew (macOS/Linux)
+brew install akomyagin/tap/gitl
+
+# Либо подписанный релизный бинарь из GitHub Releases (см. VERIFY.md)
 ```
 
 ### Локальный тест мультипровайдерности (Ollama)
@@ -143,7 +149,7 @@ jobs:
         with:
           fetch-depth: 0    # обязательно: без полной истории base..head не резолвится
 
-      - uses: akomyagin/gitl@v0.2.0
+      - uses: akomyagin/gitl@v0.2.1
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, см. ниже
           fail-on: high                               # опционально: блокировать мерж при высоком риске

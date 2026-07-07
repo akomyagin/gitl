@@ -18,8 +18,9 @@ Ollama (local/self-hosted), Azure OpenAI. No telemetry.
 
 > **Status:** MVP complete. All three commands (`review`/`changelog`/`digest`) work on real
 > repositories with all three output formats (`md|text|json`). The Action posts AI reviews as
-> sticky PR comments and gates on risk score. `v0.2.0` ships cross-compiled, cosign-signed
-> release binaries; `v0.3.0` adds SLSA L3 build provenance alongside cosign signatures
+> sticky PR comments and gates on risk score. The latest tagged release, `v0.2.1`, ships
+> cross-compiled, cosign-signed release binaries. SLSA L3 build provenance alongside cosign
+> signatures is implemented on `main` and will ship with the next tag, `v0.3.0`
 > (see [VERIFY.md](VERIFY.md) for verification). Marketplace listing is the remaining manual step.
 
 ## Quick start
@@ -63,7 +64,13 @@ go test ./...
 Install:
 
 ```bash
+# Go toolchain
 go install github.com/akomyagin/gitl/cmd/gitl@latest
+
+# Homebrew (macOS/Linux)
+brew install akomyagin/tap/gitl
+
+# Or download a signed release binary from GitHub Releases (see VERIFY.md)
 ```
 
 ### Local multi-provider test (Ollama)
@@ -138,7 +145,7 @@ jobs:
         with:
           fetch-depth: 0    # required: without full history base..head won't resolve
 
-      - uses: akomyagin/gitl@v0.2.0
+      - uses: akomyagin/gitl@v0.2.1
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, see below
           fail-on: high                               # optional: block merge on high risk
