@@ -2,8 +2,11 @@ package render
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"text/template"
 	"time"
 )
 
@@ -144,6 +147,90 @@ func TestRenderUnknownFormat(t *testing.T) {
 	var b strings.Builder
 	if err := Render(&b, sampleArtifact(), Format("xml")); err == nil {
 		t.Error("expected error for unknown format")
+	}
+}
+
+// TestRenderWithTemplateEmptyMarkdown: an empty template path with md format
+// produces output identical to Render.
+func TestRenderWithTemplateEmptyMarkdown(t *testing.T) {
+	var want, got strings.Builder
+	if err := Render(&want, sampleArtifact(), FormatMarkdown); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if err := RenderWithTemplate(&got, sampleArtifact(), FormatMarkdown, ""); err != nil {
+		t.Fatalf("RenderWithTemplate: %v", err)
+	}
+	if got.String() != want.String() {
+		t.Errorf("RenderWithTemplate differs from Render:\ngot:\n%s\nwant:\n%s", got.String(), want.String())
+	}
+}
+
+// TestRenderWithTemplateCustom: a custom template file substitutes artifact
+// fields.
+func TestRenderWithTemplateCustom(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "custom.md.tmpl")
+	if err := os.WriteFile(path, []byte("Risk={{.RiskLevel}} Range={{.Range}}"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	var b strings.Builder
+	if err := RenderWithTemplate(&b, sampleArtifact(), FormatMarkdown, path); err != nil {
+		t.Fatalf("RenderWithTemplate: %v", err)
+	}
+	if got := b.String(); got != "Risk=medium Range=HEAD~5..HEAD" {
+		t.Errorf("custom template not rendered: %q", got)
+	}
+}
+
+// TestRenderWithTemplateJSONIgnoresTemplate: for json format the template path
+// is ignored and standard JSON is emitted (a warning is logged via slog.Warn).
+func TestRenderWithTemplateJSONIgnoresTemplate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "custom.md.tmpl")
+	if err := os.WriteFile(path, []byte("SHOULD NOT APPEAR {{.Range}}"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	var b strings.Builder
+	if err := RenderWithTemplate(&b, sampleArtifact(), FormatJSON, path); err != nil {
+		t.Fatalf("RenderWithTemplate: %v", err)
+	}
+	if strings.Contains(b.String(), "SHOULD NOT APPEAR") {
+		t.Errorf("json output unexpectedly used the template:\n%s", b.String())
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(b.String()), &m); err != nil {
+		t.Fatalf("json format did not emit valid JSON: %v\n%s", err, b.String())
+	}
+}
+
+// TestReviewMDTmplMatchesRenderMarkdown: the example template file
+// templates/review.md.tmpl must reproduce renderMarkdown output byte-for-byte
+// (with and without the heuristic annotation). Reading from disk (not embed)
+// keeps the binary lean while still catching drift.
+func TestReviewMDTmplMatchesRenderMarkdown(t *testing.T) {
+	data, err := os.ReadFile("templates/review.md.tmpl")
+	if err != nil {
+		t.Fatalf("read template file: %v", err)
+	}
+	tmpl, err := template.New("default").Funcs(tmplFuncs).Parse(string(data))
+	if err != nil {
+		t.Fatalf("parse template file: %v", err)
+	}
+	for _, heuristic := range []bool{false, true} {
+		art := sampleArtifact()
+		art.RiskHeuristic = heuristic
+		var want strings.Builder
+		if err := renderMarkdown(&want, art); err != nil {
+			t.Fatalf("renderMarkdown: %v", err)
+		}
+		var got strings.Builder
+		if err := tmpl.Execute(&got, art); err != nil {
+			t.Fatalf("execute template: %v", err)
+		}
+		if got.String() != want.String() {
+			t.Errorf("review.md.tmpl != renderMarkdown (heuristic=%v):\ngot:\n%q\nwant:\n%q",
+				heuristic, got.String(), want.String())
+		}
 	}
 }
 

@@ -179,6 +179,77 @@ func TestValidateNormalizesFailOnCase(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsMissingPromptTemplate: a missing prompt template file must
+// cause a config-load error in online mode (api_key set).
+func TestValidateRejectsMissingPromptTemplate(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	missing := filepath.Join(dir, "no-such.tmpl")
+	// api_key must be set so validate() is in online mode and actually checks
+	// the system template file.
+	writeFile(t, personalPath, "llm:\n  api_key: test-key\nprompt:\n  system_template_file: "+missing+"\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err == nil {
+		t.Error("expected error for missing prompt.system_template_file in online mode")
+	}
+}
+
+// TestValidateSkipsPromptTemplateInOfflineMode: when no api_key is configured
+// (offline mode), an inaccessible system template file must not block Load so
+// that deterministic offline reviews remain available.
+func TestValidateSkipsPromptTemplateInOfflineMode(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	missing := filepath.Join(dir, "no-such.tmpl")
+	writeFile(t, personalPath, "prompt:\n  system_template_file: "+missing+"\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err != nil {
+		t.Errorf("offline mode must not validate prompt.system_template_file: %v", err)
+	}
+}
+
+// TestValidateAcceptsOutputTemplateWithFuncMapFunctions: an output template
+// that calls upper or trimTrailingNewlines must not be rejected at config load.
+func TestValidateAcceptsOutputTemplateWithFuncMapFunctions(t *testing.T) {
+	dir := t.TempDir()
+	outPath := filepath.Join(dir, "out.md.tmpl")
+	writeFile(t, outPath, "Risk={{upper .RiskLevel}}")
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "output:\n  template_file: "+outPath+"\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err != nil {
+		t.Errorf("output template using 'upper' must be accepted at config load: %v", err)
+	}
+}
+
+// TestValidateRejectsInvalidOutputTemplate: a template file with a syntax error
+// must fail at config load, not mid-render (Item 3).
+func TestValidateRejectsInvalidOutputTemplate(t *testing.T) {
+	dir := t.TempDir()
+	tmplPath := filepath.Join(dir, "bad.md.tmpl")
+	writeFile(t, tmplPath, "Risk={{.RiskLevel") // unterminated action
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "output:\n  template_file: "+tmplPath+"\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err == nil {
+		t.Error("expected error for invalid output.template_file")
+	}
+}
+
+// TestValidateAcceptsValidTemplates: valid template files load without error.
+func TestValidateAcceptsValidTemplates(t *testing.T) {
+	dir := t.TempDir()
+	sysPath := filepath.Join(dir, "sys.tmpl")
+	writeFile(t, sysPath, "Reviewer for {{.Range}}")
+	outPath := filepath.Join(dir, "out.md.tmpl")
+	writeFile(t, outPath, "Risk={{.RiskLevel}}")
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "prompt:\n  system_template_file: "+sysPath+"\noutput:\n  template_file: "+outPath+"\n")
+	cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Prompt.SystemTemplateFile != sysPath || cfg.Output.TemplateFile != outPath {
+		t.Errorf("template paths not loaded: prompt=%q output=%q", cfg.Prompt.SystemTemplateFile, cfg.Output.TemplateFile)
+	}
+}
+
 // TestDigestRepoRelativePathResolvedAgainstRepoDir is the regression test for
 // resolveDigestRepoPaths' actual join branch (docs/TECHNICAL_PLAN.md §10.4):
 // a relative digest.repos[].path must be resolved against repoDir (the
