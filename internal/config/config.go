@@ -37,6 +37,15 @@ type Config struct {
 	Policy PolicyConfig `mapstructure:"policy"`
 	Digest DigestConfig `mapstructure:"digest"`
 	Prompt PromptConfig `mapstructure:"prompt"`
+	Cache  CacheConfig  `mapstructure:"cache"`
+}
+
+// CacheConfig controls the on-disk LLM response cache (Item 5). Enabled toggles
+// the cache; TTLHours <= 0 also disables it. Only used for network reviews —
+// offline mode never consults or writes the cache.
+type CacheConfig struct {
+	Enabled  bool `mapstructure:"enabled"`
+	TTLHours int  `mapstructure:"ttl_hours"`
 }
 
 // PromptConfig holds custom prompt template overrides (Item 3). When
@@ -163,6 +172,8 @@ func defaults() map[string]any {
 		"diff.max_diff_bytes":         120000,
 		"diff.exclude_globs":          []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},
 		"policy.fail_on":              "never",
+		"cache.enabled":               true,
+		"cache.ttl_hours":             24,
 	}
 }
 

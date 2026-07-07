@@ -14,6 +14,7 @@ import (
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/gitlog"
 	"github.com/akomyagin/gitl/internal/llm"
+	"github.com/akomyagin/gitl/internal/llmcache"
 	"github.com/akomyagin/gitl/internal/prompt"
 	"github.com/akomyagin/gitl/internal/render"
 )
@@ -57,6 +58,7 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().String("fail-on", "", "exit non-zero when risk meets threshold (never | low | medium | high)")
 	cmd.Flags().Float64("max-cost-usd", 0, "block the request if the estimated cost exceeds this (<=0 disables the guard)")
 	cmd.Flags().Bool("dry-run", false, "print a cost estimate and exit without calling the API")
+	cmd.Flags().Bool("no-cache", false, "skip LLM response cache (always call the API)")
 
 	return cmd
 }
@@ -112,6 +114,36 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 		return fmt.Errorf("prompt template: %w", err)
 	}
 
+	// LLM response cache (Item 5): serve an equivalent prior review without a
+	// network call. Only active for network reviews — offline mode is already
+	// deterministic and free, so it is never cached.
+	noCache, _ := cmd.Flags().GetBool("no-cache")
+	useCache := cfg.Cache.Enabled && !noCache && !cfg.OfflineMode() && cfg.Cache.TTLHours > 0
+	var (
+		cache    *llmcache.Cache
+		cacheKey string
+	)
+	if useCache {
+		if c, err := llmcache.New(time.Duration(cfg.Cache.TTLHours) * time.Hour); err == nil {
+			cache = c
+			cacheKey = llmcache.Key(cfg.LLM.Provider, cfg.LLM.Model, system, user)
+			if resp, ok, _ := cache.Get(cacheKey); ok {
+				slog.Debug("llm cache hit", "key", cacheKey[:12])
+				art := buildArtifact(cfg, revRange, commits, diff, resp)
+				if err := render.RenderWithTemplate(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
+					return err
+				}
+				threshold := cfg.Policy.FailOn
+				if threshold != "" && threshold != "never" && llm.RiskAtLeast(resp.Risk.Level, threshold) {
+					return &failError{level: resp.Risk.Level, threshold: threshold}
+				}
+				return nil
+			}
+		} else {
+			slog.Debug("llm cache unavailable", "err", err)
+		}
+	}
+
 	// --dry-run: print the estimate, no network call, exit 0.
 	if dryRun {
 		return printDryRun(cmd, cfg, system+"\n"+user)
@@ -142,6 +174,12 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 	})
 	if err != nil {
 		return fmt.Errorf("review failed: %w", err)
+	}
+
+	if cache != nil && cacheKey != "" {
+		if err := cache.Put(cacheKey, resp); err != nil {
+			slog.Debug("llm cache put failed", "err", err)
+		}
 	}
 
 	art := buildArtifact(cfg, revRange, commits, diff, resp)
