@@ -41,6 +41,11 @@ go run ./cmd/gitl review HEAD~5..HEAD
 # review staged (not yet committed) changes before `git commit`
 go run ./cmd/gitl review --staged
 
+# review a GitHub PR by number — requires the `gh` CLI (installed + authenticated);
+# resolves base/head via gh, fetches `pull/N/head` locally when needed, and reviews
+# the merge-base diff (base...head), same as GitHub shows
+go run ./cmd/gitl review pr/42
+
 # machine-readable output for CI + risk gating
 go run ./cmd/gitl review HEAD~5..HEAD --format=json
 go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # non-zero exit on high risk

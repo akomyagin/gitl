@@ -145,6 +145,92 @@ func TestRunnerDiffAndErrors(t *testing.T) {
 	}
 }
 
+// gitOutput runs a git command in dir and returns its trimmed stdout (for
+// reading back real SHAs in tests).
+func gitOutput(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v failed: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// TestRunnerObjectExists: a real commit SHA is reported as locally available;
+// a well-formed but nonexistent SHA and a malformed ref are both false — never
+// an error (boolean probe semantics).
+func TestRunnerObjectExists(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := setupTestRepo(t)
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	ctx := context.Background()
+
+	sha := gitOutput(t, dir, "rev-parse", "HEAD")
+	if !runner.ObjectExists(ctx, sha) {
+		t.Errorf("ObjectExists(%q) = false, want true for a real local commit", sha)
+	}
+	if fake := strings.Repeat("deadbeef", 5); runner.ObjectExists(ctx, fake) {
+		t.Errorf("ObjectExists(%q) = true, want false for a nonexistent SHA", fake)
+	}
+	if runner.ObjectExists(ctx, "not-a-sha") {
+		t.Error("ObjectExists(malformed) = true, want false")
+	}
+}
+
+// TestRunnerFetchRef: fetching a branch ref from origin makes its commit
+// object locally available (the pr/N best-effort fetch path); fetching a
+// nonexistent ref surfaces git's error.
+func TestRunnerFetchRef(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	origin := setupTestRepo(t)
+
+	work := t.TempDir()
+	runTestGit(t, work, "clone", "-q", origin, "clone")
+	cloneDir := filepath.Join(work, "clone")
+
+	// A commit created in origin AFTER the clone: unknown to the clone until
+	// fetched.
+	runTestGit(t, origin, "checkout", "-q", "-b", "extra")
+	writeTestFile(t, origin, "extra.txt", "extra content\n")
+	runTestGit(t, origin, "add", ".")
+	runTestGit(t, origin, "commit", "-q", "-m", "feat: extra commit")
+	extraSHA := gitOutput(t, origin, "rev-parse", "HEAD")
+
+	runner, err := NewRunner(cloneDir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	ctx := context.Background()
+
+	if runner.ObjectExists(ctx, extraSHA) {
+		t.Fatalf("commit %s unexpectedly present in clone before fetch", extraSHA)
+	}
+	if err := runner.FetchRef(ctx, "origin", "extra"); err != nil {
+		t.Fatalf("FetchRef(origin, extra): %v", err)
+	}
+	if !runner.ObjectExists(ctx, extraSHA) {
+		t.Errorf("commit %s still missing after FetchRef", extraSHA)
+	}
+
+	if err := runner.FetchRef(ctx, "origin", "no-such-ref"); err == nil {
+		t.Error("FetchRef(origin, no-such-ref): expected error, got nil")
+	}
+	if err := runner.FetchRef(ctx, "no-such-remote", "extra"); err == nil {
+		t.Error("FetchRef(no-such-remote, extra): expected error, got nil")
+	}
+}
+
 func TestRunnerDiffStaged(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed; skipping integration test")

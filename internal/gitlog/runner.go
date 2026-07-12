@@ -41,6 +41,22 @@ type Source interface {
 	// DiffForCommit returns the unified diff text introduced by a single
 	// commit (like `git show --format= <hash>`).
 	DiffForCommit(ctx context.Context, hash string) (string, error)
+	// ObjectExists reports whether a git object (commit SHA) is available
+	// locally without a network call — used for a best-effort fetch (skip
+	// fetching what's already there, which also keeps PR review testable
+	// without real git fetches).
+	ObjectExists(ctx context.Context, sha string) bool
+	// FetchRef runs `git fetch --no-tags <remote> <ref>` for a remote ref/SHA
+	// not yet available locally (e.g. a PR head or a base commit needed for
+	// a merge-base diff).
+	FetchRef(ctx context.Context, remote, ref string) error
+	// RemoteNames returns the configured remote names (like `git remote`),
+	// one per line of git output. An empty slice with a nil error means the
+	// repository has no remotes.
+	RemoteNames(ctx context.Context) ([]string, error)
+	// RemoteURL returns the fetch URL of the given remote (like
+	// `git remote get-url <remote>`). Errors when the remote does not exist.
+	RemoteURL(ctx context.Context, remote string) (string, error)
 }
 
 // Runner implements Source by shelling out to the system `git` binary.
@@ -115,6 +131,50 @@ func (r *Runner) LogSince(ctx context.Context, since time.Time) ([]Commit, error
 // introduced by that single commit (no commit message, just the diff body).
 func (r *Runner) DiffForCommit(ctx context.Context, hash string) (string, error) {
 	return r.run(ctx, "show", "--format=", hash)
+}
+
+// ObjectExists runs `git cat-file -e <sha>^{commit}` and reports whether the
+// commit object is available locally. Any failure (missing object, malformed
+// SHA, ...) is false, never an error — this is a boolean probe, not an
+// operation that can "fail".
+func (r *Runner) ObjectExists(ctx context.Context, sha string) bool {
+	_, err := r.run(ctx, "cat-file", "-e", sha+"^{commit}")
+	return err == nil
+}
+
+// FetchRef runs `git fetch --no-tags <remote> <ref>` to make a remote ref/SHA
+// (e.g. `pull/N/head` or a base branch) available locally. The remote is a
+// parameter, not a hardcoded "origin": in fork workflows the PR's repository
+// is often configured as "upstream" while "origin" points at the fork.
+func (r *Runner) FetchRef(ctx context.Context, remote, ref string) error {
+	_, err := r.run(ctx, "fetch", "--no-tags", remote, ref)
+	return err
+}
+
+// RemoteNames runs `git remote` and returns the configured remote names. A
+// repository without remotes yields an empty slice, not an error.
+func (r *Runner) RemoteNames(ctx context.Context) ([]string, error) {
+	out, err := r.run(ctx, "remote")
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, line := range strings.Split(out, "\n") {
+		if name := strings.TrimSpace(line); name != "" {
+			names = append(names, name)
+		}
+	}
+	return names, nil
+}
+
+// RemoteURL runs `git remote get-url <remote>` and returns the fetch URL.
+// A nonexistent remote is an error (git exits non-zero).
+func (r *Runner) RemoteURL(ctx context.Context, remote string) (string, error) {
+	out, err := r.run(ctx, "remote", "get-url", remote)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
 }
 
 // run executes a git subcommand, reading stdout and stderr into separate

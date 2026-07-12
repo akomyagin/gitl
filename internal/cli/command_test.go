@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -306,6 +307,244 @@ func TestReviewStagedAllExcluded(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "excluded") {
 		t.Errorf("error should mention exclude_globs, got: %v", err)
+	}
+}
+
+// gitOut runs a git command in dir and returns its trimmed stdout (for
+// reading back real SHAs).
+func gitOut(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	full := append([]string{"-c", "commit.gpgsign=false"}, args...)
+	cmd := exec.Command("git", full...)
+	cmd.Dir = dir
+	cmd.Env = gitEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git %v: %v", args, err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// fakeResolver is a PRResolver that returns fixed SHAs (taken from a real
+// local test repo) or a fixed error — no gh, no network.
+type fakeResolver struct {
+	ref PRRef
+	err error
+}
+
+func (f *fakeResolver) ResolvePR(_ context.Context, _ int) (PRRef, error) {
+	if f.err != nil {
+		return PRRef{}, f.err
+	}
+	return f.ref, nil
+}
+
+// withFakeResolver swaps the package-level PR resolver factory for the test's
+// fake and restores it on cleanup.
+func withFakeResolver(t *testing.T, r PRResolver) {
+	t.Helper()
+	orig := newPRResolver
+	newPRResolver = func(_ string) (PRResolver, error) { return r, nil }
+	t.Cleanup(func() { newPRResolver = orig })
+}
+
+// setupPRRepo emulates a PR locally: main holds the base commit, a feature
+// branch adds one commit changing fileName. All objects are local, so the
+// best-effort fetch in prSource must skip fetching entirely (ObjectExists is
+// true) — no origin remote even exists here.
+func setupPRRepo(t *testing.T, fileName string) (dir, baseSHA, headSHA string) {
+	t.Helper()
+	dir = t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "docs: base")
+	baseSHA = gitOut(t, dir, "rev-parse", "HEAD")
+
+	runGit(t, dir, "checkout", "-q", "-b", "feature")
+	if err := os.WriteFile(filepath.Join(dir, fileName), []byte("pr change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "feat: pr change")
+	headSHA = gitOut(t, dir, "rev-parse", "HEAD")
+
+	runGit(t, dir, "checkout", "-q", "main")
+	return dir, baseSHA, headSHA
+}
+
+// TestReviewPRResolvesRange: pr/42 with a fake resolver over local SHAs runs
+// an offline review of the PR's base...head diff; the JSON artifact carries
+// "pr/42" as the range label.
+func TestReviewPRResolvesRange(t *testing.T) {
+	dir, baseSHA, headSHA := setupPRRepo(t, "feature.txt")
+	withFakeResolver(t, &fakeResolver{ref: PRRef{
+		BaseSHA:     baseSHA,
+		HeadSHA:     headSHA,
+		HeadRef:     "feature",
+		BaseRefName: "main",
+		URL:         "https://github.com/test/test/pull/42",
+	}})
+	env := map[string]string{"GITL_API_KEY": ""}
+
+	out, err := runReviewInDir(t, dir, env, "pr/42", "--format=md")
+	if err != nil {
+		t.Fatalf("pr review (md): %v", err)
+	}
+	if !strings.Contains(out, "**Risk:**") {
+		t.Errorf("pr review missing risk header:\n%s", out)
+	}
+
+	out, err = runReviewInDir(t, dir, env, "pr/42", "--format=json")
+	if err != nil {
+		t.Fatalf("pr review (json): %v", err)
+	}
+	if !strings.Contains(out, `"range": "pr/42"`) {
+		t.Errorf("json output should carry the pr/42 label:\n%s", out)
+	}
+	if !strings.Contains(out, `"commits": 1`) {
+		t.Errorf("json output should count the single PR commit:\n%s", out)
+	}
+}
+
+// TestReviewPRInvalidNumber: pr/0 matches the pr/N pattern but is not a valid
+// PR number — a clear user error before any resolver is built.
+func TestReviewPRInvalidNumber(t *testing.T) {
+	dir := setupRepo(t, false)
+	_, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "pr/0")
+	if err == nil {
+		t.Fatal("expected error for pr/0")
+	}
+	if !strings.Contains(err.Error(), "positive integer") {
+		t.Errorf("error should mention positive integer, got: %v", err)
+	}
+}
+
+// TestReviewPRAndStagedConflict: --staged and pr/N are mutually exclusive,
+// same as --staged and a range.
+func TestReviewPRAndStagedConflict(t *testing.T) {
+	dir := setupRepo(t, false)
+	_, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "--staged", "pr/1")
+	if err == nil {
+		t.Fatal("expected error when combining --staged with pr/N")
+	}
+	if !strings.Contains(err.Error(), "cannot combine --staged") {
+		t.Errorf("error should name the conflict, got: %v", err)
+	}
+}
+
+// TestReviewPRResolverError: a resolver failure (e.g. PR not found) reaches
+// the user as-is, without wrapping noise.
+func TestReviewPRResolverError(t *testing.T) {
+	dir := setupRepo(t, false)
+	resolverErr := fmt.Errorf("pull request #7 not found in this repository")
+	withFakeResolver(t, &fakeResolver{err: resolverErr})
+
+	_, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "pr/7")
+	if err == nil {
+		t.Fatal("expected resolver error to propagate")
+	}
+	if !strings.Contains(err.Error(), "pull request #7 not found") {
+		t.Errorf("resolver error should reach the user as-is, got: %v", err)
+	}
+}
+
+// TestReviewPRAllExcluded: a PR whose entire diff is excluded by
+// exclude_globs must error clearly, not silently review an empty diff.
+func TestReviewPRAllExcluded(t *testing.T) {
+	dir, baseSHA, headSHA := setupPRRepo(t, "excluded.txt")
+	withFakeResolver(t, &fakeResolver{ref: PRRef{
+		BaseSHA:     baseSHA,
+		HeadSHA:     headSHA,
+		HeadRef:     "feature",
+		BaseRefName: "main",
+		URL:         "https://github.com/test/test/pull/42",
+	}})
+
+	cfgPath := filepath.Join(dir, "gitl-exclude.yaml")
+	cfgYAML := "diff:\n  exclude_globs: [\"excluded.txt\"]\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+	t.Setenv("GITL_API_KEY", "")
+
+	root := newRootCmd()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"review", "--config", cfgPath, "pr/42"})
+	err = root.ExecuteContext(context.Background())
+
+	if err == nil {
+		t.Fatal("expected error when the whole PR diff is excluded by exclude_globs")
+	}
+	if !strings.Contains(err.Error(), "pr/42") || !strings.Contains(err.Error(), "excluded") {
+		t.Errorf("error should name pr/42 and exclude_globs, got: %v", err)
+	}
+}
+
+// TestReviewRangeWithPrLikeLabelNotTreatedAsPR: a revision range whose label
+// merely STARTS with "pr/" (a real branch named pr/5, common in Gerrit/gitflow
+// setups) must keep range semantics — in particular, a fully-excluded diff is
+// NOT an error in range mode (commit metadata alone is worth reviewing).
+// Regression test for the label-prefix sniffing bug in runReview.
+func TestReviewRangeWithPrLikeLabelNotTreatedAsPR(t *testing.T) {
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "docs: base")
+	// A branch literally named pr/5 pointing at the base commit.
+	runGit(t, dir, "branch", "pr/5")
+	// One commit on main whose entire diff is excluded below.
+	if err := os.WriteFile(filepath.Join(dir, "excluded.txt"), []byte("change\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", ".")
+	runGit(t, dir, "commit", "-q", "-m", "chore: excluded-only change")
+
+	cfgPath := filepath.Join(dir, "gitl-exclude.yaml")
+	cfgYAML := "diff:\n  exclude_globs: [\"excluded.txt\"]\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+	t.Setenv("GITL_API_KEY", "")
+
+	root := newRootCmd()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"review", "--config", cfgPath, "pr/5..HEAD"})
+	err = root.ExecuteContext(context.Background())
+
+	if err != nil {
+		t.Fatalf("range review over a pr/-named branch must succeed on an all-excluded diff, got: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Risk") {
+		t.Errorf("expected a rendered review with a risk header, got:\n%s", stdout.String())
 	}
 }
 
