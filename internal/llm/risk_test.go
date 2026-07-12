@@ -93,6 +93,33 @@ func TestHeuristicRisk(t *testing.T) {
 	}
 }
 
+// TestHeuristicRiskStagedSensitivePath: with no commit metadata (the staged
+// review case — nothing is committed yet), a sensitive path must still be
+// detected from the diff's own "diff --git" headers, not silently missed.
+func TestHeuristicRiskStagedSensitivePath(t *testing.T) {
+	t.Parallel()
+	diff := "diff --git a/internal/auth/token.go b/internal/auth/token.go\n" +
+		"new file mode 100644\n--- /dev/null\n+++ b/internal/auth/token.go\n+package auth\n"
+	got := HeuristicRisk(nil, diff)
+	if got.Level != RiskHigh {
+		t.Errorf("level = %q, want %q (summary: %q)", got.Level, RiskHigh, got.Summary)
+	}
+	if !strings.Contains(got.Summary, "auth") && !strings.Contains(got.Summary, "token") {
+		t.Errorf("summary should name the sensitive keyword, got: %q", got.Summary)
+	}
+}
+
+// TestHeuristicRiskStagedNoSensitivePath: staged mode with no commits and no
+// sensitive path in the diff must not spuriously trigger the keyword gate.
+func TestHeuristicRiskStagedNoSensitivePath(t *testing.T) {
+	t.Parallel()
+	diff := "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n+hello\n"
+	got := HeuristicRisk(nil, diff)
+	if got.Level != RiskLow {
+		t.Errorf("level = %q, want %q (summary: %q)", got.Level, RiskLow, got.Summary)
+	}
+}
+
 func TestHeuristicRiskDeterministic(t *testing.T) {
 	t.Parallel()
 	c := commitsWith(gitlog.FileChange{Status: "M", Path: "internal/security/perm.go"})

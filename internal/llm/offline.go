@@ -61,14 +61,21 @@ func (o *Offline) render() string {
 	return b.String()
 }
 
-// writeSummary writes the high-level counts.
+// writeSummary writes the high-level counts. With no commit metadata (a
+// staged review, or a genuinely empty range) it falls back to diff-derived
+// stats rather than claiming nothing was found when a real diff exists.
 func (o *Offline) writeSummary(b *strings.Builder) {
-	fileCount, adds, dels, mods, renames := o.fileStats()
 	b.WriteString("## Summary\n\n")
 	if len(o.commits) == 0 {
-		b.WriteString("No commits found in the given range.\n\n")
+		if strings.TrimSpace(o.diff) == "" {
+			b.WriteString("No commits found in the given range.\n\n")
+			return
+		}
+		fmt.Fprintf(b, "- **Files touched:** %d (staged, not yet committed)\n", gitlog.DiffFileCount(o.diff))
+		fmt.Fprintf(b, "- **Diff size:** ~%s\n\n", humanBytes(len(o.diff)))
 		return
 	}
+	fileCount, adds, dels, mods, renames := o.fileStats()
 	fmt.Fprintf(b, "- **Commits:** %d\n", len(o.commits))
 	fmt.Fprintf(b, "- **Files touched:** %d (added %d, modified %d, deleted %d, renamed %d)\n",
 		fileCount, adds, mods, dels, renames)
@@ -92,7 +99,23 @@ func (o *Offline) writeCommits(b *strings.Builder) {
 }
 
 // writeFiles lists changed files grouped by status, deterministically sorted.
+// With no commit metadata (staged review), status per file isn't available
+// from a unified diff without deeper parsing, so paths are listed plainly.
 func (o *Offline) writeFiles(b *strings.Builder) {
+	if len(o.commits) == 0 {
+		paths := gitlog.DiffPaths(o.diff)
+		if len(paths) == 0 {
+			return
+		}
+		sort.Strings(paths)
+		b.WriteString("## Changed files\n\n")
+		for _, p := range paths {
+			fmt.Fprintf(b, "- `%s`\n", p)
+		}
+		b.WriteString("\n")
+		return
+	}
+
 	// Deduplicate files across commits. git log yields commits newest-first,
 	// so the first time a path is seen carries its most recent status; keep
 	// that and ignore older entries. Output is sorted by path for determinism.

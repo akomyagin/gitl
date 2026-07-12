@@ -126,9 +126,18 @@ func sensitiveHits(commits []gitlog.Commit, diff string) []string {
 			haystack.WriteByte('\n')
 		}
 	}
-	// The diff body is deliberately not scanned for keywords: it commonly
-	// contains benign occurrences (e.g. the word "token" in a comment) that
-	// would over-trigger. Paths, subjects and bodies are the strong signal.
+	// File paths parsed from the diff's structured "diff --git" headers are
+	// the same category of signal as commit file paths, so they're scanned
+	// too — this is the only path signal available for a staged review,
+	// which has no commit metadata yet.
+	for _, p := range gitlog.DiffPaths(diff) {
+		haystack.WriteString(p)
+		haystack.WriteByte('\n')
+	}
+	// The diff body's actual content lines are deliberately not scanned for
+	// keywords: they commonly contain benign occurrences (e.g. the word
+	// "token" in a comment) that would over-trigger. Paths, subjects and
+	// bodies are the strong signal.
 	lower := strings.ToLower(haystack.String())
 
 	seen := map[string]bool{}

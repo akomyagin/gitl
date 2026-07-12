@@ -224,3 +224,100 @@ func TestReviewDryRunOnline(t *testing.T) {
 		t.Errorf("online dry-run estimate missing:\n%s", out)
 	}
 }
+
+// TestReviewStagedOffline: --staged reviews the index instead of a commit
+// range, with no range argument.
+func TestReviewStagedOffline(t *testing.T) {
+	dir := setupRepo(t, false)
+	if err := os.WriteFile(filepath.Join(dir, "staged.txt"), []byte("new staged content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "staged.txt")
+
+	out, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "--staged", "--format=md")
+	if err != nil {
+		t.Fatalf("staged review: %v", err)
+	}
+	if !strings.Contains(out, "**Risk:**") {
+		t.Errorf("staged review missing risk header:\n%s", out)
+	}
+}
+
+// TestReviewStagedNoChanges: --staged with an empty index is a clear user
+// error, not a silent empty review.
+func TestReviewStagedNoChanges(t *testing.T) {
+	dir := setupRepo(t, false)
+	_, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "--staged")
+	if err == nil {
+		t.Fatal("expected error for --staged with nothing staged")
+	}
+	if !strings.Contains(err.Error(), "no staged changes") {
+		t.Errorf("error should mention no staged changes, got: %v", err)
+	}
+}
+
+// TestReviewStagedAndRangeConflict: --staged and a positional range are
+// mutually exclusive.
+func TestReviewStagedAndRangeConflict(t *testing.T) {
+	dir := setupRepo(t, false)
+	_, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "--staged", "HEAD~1..HEAD")
+	if err == nil {
+		t.Fatal("expected error when combining --staged with a range")
+	}
+	if !strings.Contains(err.Error(), "cannot combine --staged") {
+		t.Errorf("error should name the conflict, got: %v", err)
+	}
+}
+
+// TestReviewStagedAllExcluded: staged changes that are entirely excluded by
+// exclude_globs must error clearly, not silently review an empty diff.
+func TestReviewStagedAllExcluded(t *testing.T) {
+	dir := setupRepo(t, false)
+	if err := os.WriteFile(filepath.Join(dir, "excluded.txt"), []byte("content\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, dir, "add", "excluded.txt")
+
+	cfgPath := filepath.Join(dir, "gitl-exclude.yaml")
+	cfgYAML := "diff:\n  exclude_globs: [\"excluded.txt\"]\n"
+	if err := os.WriteFile(cfgPath, []byte(cfgYAML), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.Chdir(orig) }()
+	t.Setenv("GITL_API_KEY", "")
+
+	root := newRootCmd()
+	var stdout, stderr bytes.Buffer
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"review", "--config", cfgPath, "--staged"})
+	err = root.ExecuteContext(context.Background())
+
+	if err == nil {
+		t.Fatal("expected error when all staged files are excluded by exclude_globs")
+	}
+	if !strings.Contains(err.Error(), "excluded") {
+		t.Errorf("error should mention exclude_globs, got: %v", err)
+	}
+}
+
+// TestReviewNoRangeNoStaged: neither a range nor --staged is also a clear
+// user error.
+func TestReviewNoRangeNoStaged(t *testing.T) {
+	dir := setupRepo(t, false)
+	_, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""})
+	if err == nil {
+		t.Fatal("expected error when neither a range nor --staged is given")
+	}
+	if !strings.Contains(err.Error(), "provide a revision range") {
+		t.Errorf("error should prompt for a range or --staged, got: %v", err)
+	}
+}
