@@ -106,6 +106,30 @@ func TestBuildArtifactStats(t *testing.T) {
 	}
 }
 
+// TestBuildArtifactStatsStaged: in staged mode there are no commits, so
+// FilesChanged must come from the diff headers (gitlog.DiffFileCount), not
+// from commit metadata (which is empty/nil).
+func TestBuildArtifactStatsStaged(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		LLM: config.LLMConfig{Provider: "openai", Model: "gpt-4o-mini", APIKey: "k"},
+	}
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n+added1\n" +
+		"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n+added2\n"
+	resp := llm.Response{Content: "review", Risk: llm.Risk{Level: "low", Summary: "sum"}}
+
+	art := buildArtifact(cfg, "staged", nil, diff, resp)
+	if art.Stats.Commits != 0 {
+		t.Errorf("commits = %d, want 0 (nothing committed yet)", art.Stats.Commits)
+	}
+	if art.Stats.FilesChanged != 2 {
+		t.Errorf("files_changed = %d, want 2 (from diff headers)", art.Stats.FilesChanged)
+	}
+	if art.Range != "staged" {
+		t.Errorf("range = %q, want %q", art.Range, "staged")
+	}
+}
+
 func TestByteCountWriter(t *testing.T) {
 	t.Parallel()
 	var buf strings.Builder

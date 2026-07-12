@@ -8,7 +8,8 @@
 - **`gitl review <range>`** — AI-ревью диапазона/PR с машиночитаемым риск-скорингом
   (`low|medium|high`) для гейтинга в CI (`--fail-on=high` → ненулевой exit code);
   стримит токены в терминал в реальном времени; дисковый кэш LLM-ответов;
-  кастомные системные шаблоны промптов.
+  кастомные системные шаблоны промптов; `--staged` — ревью staged (ещё не
+  закоммиченных) изменений перед `git commit`.
 - **`gitl changelog [<range>]`** — changelog в стиле Keep a Changelog, группировка
   по conventional-commits (по умолчанию — диапазон от последнего тега до `HEAD`);
 - **`gitl digest [--days=N] [--repos=a,b,c]`** — сводка активности по авторам/темам/
@@ -36,6 +37,9 @@ GITL_API_KEY=sk-... go run ./cmd/gitl review HEAD~5..HEAD
 
 # без ключа — детерминированный offline-обзор (эвристика, без сети)
 go run ./cmd/gitl review HEAD~5..HEAD
+
+# ревью staged (ещё не закоммиченных) изменений перед `git commit`
+go run ./cmd/gitl review --staged
 
 # машиночитаемый вывод для CI + гейтинг по риску
 go run ./cmd/gitl review HEAD~5..HEAD --format=json

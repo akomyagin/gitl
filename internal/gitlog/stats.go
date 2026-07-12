@@ -42,3 +42,31 @@ func DiffFileCount(diff string) int {
 	}
 	return n
 }
+
+// DiffPaths extracts the changed (b-side) file paths from a unified diff by
+// parsing "diff --git a/x b/y" headers. Used as the sensitive-path signal
+// when no commit metadata exists (e.g. a staged review, where there is no
+// commit history to scan file paths from).
+func DiffPaths(diff string) []string {
+	const sep = "diff --git "
+	idx := strings.Index(diff, sep)
+	if idx == -1 {
+		return nil
+	}
+	var paths []string
+	for _, sec := range strings.Split(diff[idx:], sep) {
+		if sec == "" {
+			continue
+		}
+		header := sec
+		if nl := strings.IndexByte(sec, '\n'); nl != -1 {
+			header = sec[:nl]
+		}
+		// header is "a/OLDPATH b/NEWPATH"; find the last " b/" to correctly
+		// split the b-side even for paths containing spaces.
+		if i := strings.LastIndex(header, " b/"); i >= 0 {
+			paths = append(paths, header[i+3:])
+		}
+	}
+	return paths
+}

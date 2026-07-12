@@ -49,18 +49,35 @@ func (c *byteCountWriter) Write(p []byte) (int, error) {
 // newReviewCmd builds the `gitl review <range>` command.
 func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "review <range>",
-		Short: "AI review of a commit range (e.g. HEAD~5..HEAD)",
+		Use:   "review [<range>]",
+		Short: "AI review of a commit range (e.g. HEAD~5..HEAD) or staged changes",
 		Long: "review runs `git log` + `git diff` over the given revision range, sends the\n" +
 			"result to an LLM, and prints a review (md/text/json) to stdout with a\n" +
 			"structured risk score.\n\n" +
+			"With --staged it reviews the staged (indexed, not yet committed) changes\n" +
+			"via `git diff --cached` instead — no revision range is needed, a natural\n" +
+			"pre-commit check. --staged and <range> are mutually exclusive.\n\n" +
 			"Without an API key (GITL_API_KEY or llm.api_key) it falls back to a\n" +
 			"deterministic offline review and prints a warning to stderr.\n\n" +
 			"--dry-run prints a cost estimate and exits without calling the API.\n" +
 			"--fail-on gates CI: exit non-zero when the risk level meets the threshold.",
-		Args: cobra.ExactArgs(1),
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runReview(cmd.Context(), cmd, gf, args[0])
+			staged, err := cmd.Flags().GetBool("staged")
+			if err != nil {
+				return err
+			}
+			switch {
+			case staged && len(args) > 0:
+				return fmt.Errorf("cannot combine --staged with a revision range: --staged reviews the index, a range reviews history — pick one")
+			case !staged && len(args) == 0:
+				return fmt.Errorf("provide a revision range (e.g. HEAD~5..HEAD) or --staged to review staged changes")
+			}
+			revRange := ""
+			if len(args) == 1 {
+				revRange = args[0]
+			}
+			return runReview(cmd.Context(), cmd, gf, revRange, staged)
 		},
 	}
 
@@ -75,12 +92,14 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().Bool("dry-run", false, "print a cost estimate and exit without calling the API")
 	cmd.Flags().Bool("no-cache", false, "skip LLM response cache (always call the API)")
 	cmd.Flags().Bool("no-stream", false, "disable token-by-token streaming (wait for full response)")
+	cmd.Flags().Bool("staged", false, "review staged (indexed, not yet committed) changes instead of a revision range")
 
 	return cmd
 }
 
-// runReview executes the full review pipeline for one revision range.
-func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRange string) error {
+// runReview executes the full review pipeline for one revision range, or for
+// the staged index when staged is true (revRange is then empty and ignored).
+func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRange string, staged bool) error {
 	cfg, err := loadConfig(cmd, gf)
 	if err != nil {
 		return err
@@ -95,17 +114,38 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 		return err
 	}
 
-	slog.Debug("collecting git history", "range", revRange)
-	commits, err := runner.Log(ctx, revRange)
-	if err != nil {
-		return err
-	}
-	if len(commits) == 0 {
-		return fmt.Errorf("no commits found in range %q", revRange)
-	}
-	rawDiff, err := runner.Diff(ctx, revRange)
-	if err != nil {
-		return err
+	// Staged mode has no commits (nothing is committed yet): the commit
+	// sections stay empty downstream (prompt, artifact) and the diff comes
+	// from the index. Range mode keeps the historical log+diff pair.
+	var (
+		commits []gitlog.Commit
+		rawDiff string
+	)
+	if staged {
+		// Label used wherever a range string is displayed (prompt header,
+		// artifact "range" field, JSON output).
+		revRange = "staged"
+		slog.Debug("collecting staged diff")
+		rawDiff, err = runner.DiffStaged(ctx)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(rawDiff) == "" {
+			return fmt.Errorf("no staged changes to review (stage files with `git add` first)")
+		}
+	} else {
+		slog.Debug("collecting git history", "range", revRange)
+		commits, err = runner.Log(ctx, revRange)
+		if err != nil {
+			return err
+		}
+		if len(commits) == 0 {
+			return fmt.Errorf("no commits found in range %q", revRange)
+		}
+		rawDiff, err = runner.Diff(ctx, revRange)
+		if err != nil {
+			return err
+		}
 	}
 
 	// Config-driven diff shaping: drop excluded files, then truncate to
@@ -113,6 +153,9 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 	excludeGlobs := mergedExcludeGlobs(cfg)
 	diff := filterDiffByGlobs(rawDiff, excludeGlobs)
 	diff = truncateDiff(diff, cfg.Diff.MaxDiffBytes)
+	if staged && strings.TrimSpace(diff) == "" {
+		return fmt.Errorf("no staged changes to review: all staged files are excluded by exclude_globs")
+	}
 
 	// Custom prompt templates apply only when calling a real provider; the
 	// offline provider ignores the system prompt, so pass an empty path in
@@ -125,6 +168,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 		Range:   revRange,
 		Commits: commits,
 		Diff:    diff,
+		Staged:  staged,
 	}, systemTemplateFile)
 	if err != nil {
 		return fmt.Errorf("prompt template: %w", err)
@@ -133,6 +177,10 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 	// LLM response cache (Item 5): serve an equivalent prior review without a
 	// network call. Only active for network reviews — offline mode is already
 	// deterministic and free, so it is never cached.
+	// The key hashes provider+model+system+user, and the user message embeds
+	// the full diff — so staged mode is content-addressed by the staged diff
+	// itself (no range exists to key on): re-running with the same index hits
+	// the cache, any `git add` changes the diff and therefore the key.
 	noCache, _ := cmd.Flags().GetBool("no-cache")
 	useCache := cfg.Cache.Enabled && !noCache && !cfg.OfflineMode() && cfg.Cache.TTLHours > 0
 	var (
@@ -251,9 +299,14 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 }
 
 // buildArtifact assembles the render artifact from the review inputs and the
-// provider response.
+// provider response. With no commit metadata (a staged review has none), the
+// changed-file count comes from the diff headers instead.
 func buildArtifact(cfg *config.Config, revRange string, commits []gitlog.Commit, diff string, resp llm.Response) render.Artifact {
 	added, removed := gitlog.DiffLineStats(diff)
+	filesChanged := gitlog.ChangedFileCount(commits)
+	if len(commits) == 0 {
+		filesChanged = gitlog.DiffFileCount(diff)
+	}
 	rc := make([]render.Commit, 0, len(commits))
 	for _, c := range commits {
 		rc = append(rc, render.Commit{
@@ -274,7 +327,7 @@ func buildArtifact(cfg *config.Config, revRange string, commits []gitlog.Commit,
 		RiskHeuristic: resp.Risk.Heuristic,
 		Stats: render.Stats{
 			Commits:      len(commits),
-			FilesChanged: gitlog.ChangedFileCount(commits),
+			FilesChanged: filesChanged,
 			LinesAdded:   added,
 			LinesRemoved: removed,
 		},

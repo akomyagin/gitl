@@ -8,7 +8,8 @@ repository's git history and turns it into a structured engineering artifact via
 - **`gitl review <range>`** — AI review of a commit range / PR with machine-readable
   risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → non-zero exit code);
   streams tokens to the terminal in real time; on-disk LLM response cache;
-  custom system-prompt templates.
+  custom system-prompt templates; `--staged` reviews staged (uncommitted) changes
+  before `git commit`.
 - **`gitl changelog [<range>]`** — Keep a Changelog-style changelog, grouped by
   conventional commits (defaults to last tag → `HEAD`);
 - **`gitl digest [--days=N] [--repos=a,b,c]`** — activity summary by author/topic/file,
@@ -36,6 +37,9 @@ GITL_API_KEY=sk-... go run ./cmd/gitl review HEAD~5..HEAD
 
 # no key = deterministic offline review (heuristic risk, no network call)
 go run ./cmd/gitl review HEAD~5..HEAD
+
+# review staged (not yet committed) changes before `git commit`
+go run ./cmd/gitl review --staged
 
 # machine-readable output for CI + risk gating
 go run ./cmd/gitl review HEAD~5..HEAD --format=json

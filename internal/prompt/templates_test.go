@@ -117,3 +117,40 @@ func TestBuildReviewWithTemplateMissing(t *testing.T) {
 		t.Fatal("expected error for missing template file, got nil")
 	}
 }
+
+// TestBuildReviewStaged: Staged=true drops the range/commit-list framing (there
+// is no range and no commit history yet) but still carries the diff through
+// unchanged.
+func TestBuildReviewStaged(t *testing.T) {
+	t.Parallel()
+	r := Review{
+		Staged: true,
+		Diff:   "--- a/a.go\n+++ b/a.go\n+added\n",
+	}
+	_, user := BuildReview(r)
+
+	if !strings.Contains(user, "Review the staged changes (not yet committed).") {
+		t.Errorf("user prompt missing staged framing:\n%s", user)
+	}
+	if !strings.Contains(user, "(staged changes — not yet committed, no commit history)") {
+		t.Errorf("user prompt missing staged commit-section notice:\n%s", user)
+	}
+	if strings.Contains(user, "Review the git range") {
+		t.Errorf("staged prompt should not use the range framing:\n%s", user)
+	}
+	if !strings.Contains(user, "+added") {
+		t.Errorf("staged prompt should still carry the diff:\n%s", user)
+	}
+}
+
+// TestBuildReviewStagedDeterministic mirrors TestBuildReviewDeterministic for
+// the staged path.
+func TestBuildReviewStagedDeterministic(t *testing.T) {
+	t.Parallel()
+	r := Review{Staged: true, Diff: "--- a/a.go\n+++ b/a.go\n+added\n"}
+	system1, user1 := BuildReview(r)
+	system2, user2 := BuildReview(r)
+	if system1 != system2 || user1 != user2 {
+		t.Error("BuildReview(staged) is not deterministic")
+	}
+}

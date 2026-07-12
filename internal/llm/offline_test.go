@@ -111,6 +111,26 @@ func TestOfflineEmptyRange(t *testing.T) {
 	}
 }
 
+// TestOfflineStagedNoCommitsButRealDiff: no commit metadata but a real diff
+// (the staged-review case) must NOT claim "no commits found" — that's
+// misleading when a real change is actually being reviewed.
+func TestOfflineStagedNoCommitsButRealDiff(t *testing.T) {
+	diff := "diff --git a/staged.txt b/staged.txt\n--- /dev/null\n+++ b/staged.txt\n+new content\n"
+	out, err := NewOffline(nil, diff).Complete(context.Background(), Request{})
+	if err != nil {
+		t.Fatalf("Complete() error = %v", err)
+	}
+	if strings.Contains(out.Content, "No commits found") {
+		t.Errorf("staged review should not claim no commits were found:\n%s", out.Content)
+	}
+	if !strings.Contains(out.Content, "staged.txt") {
+		t.Errorf("staged review should list the changed file:\n%s", out.Content)
+	}
+	if !strings.Contains(out.Content, "Files touched") {
+		t.Errorf("staged review should report a file count:\n%s", out.Content)
+	}
+}
+
 func TestOfflineRespectsContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

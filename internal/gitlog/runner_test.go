@@ -144,3 +144,37 @@ func TestRunnerDiffAndErrors(t *testing.T) {
 		t.Errorf("Log error should carry git stderr, got: %v", err)
 	}
 }
+
+func TestRunnerDiffStaged(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := setupTestRepo(t)
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	ctx := context.Background()
+
+	// Nothing staged yet: empty diff, no error.
+	diff, err := runner.DiffStaged(ctx)
+	if err != nil {
+		t.Fatalf("DiffStaged with empty index: %v", err)
+	}
+	if diff != "" {
+		t.Errorf("DiffStaged with empty index = %q, want empty", diff)
+	}
+
+	// Stage a new file without committing.
+	writeTestFile(t, dir, "staged.txt", "staged content\n")
+	runTestGit(t, dir, "add", "staged.txt")
+
+	diff, err = runner.DiffStaged(ctx)
+	if err != nil {
+		t.Fatalf("DiffStaged: %v", err)
+	}
+	if !strings.Contains(diff, "staged.txt") || !strings.Contains(diff, "+staged content") {
+		t.Errorf("DiffStaged does not mention the staged file:\n%s", diff)
+	}
+}

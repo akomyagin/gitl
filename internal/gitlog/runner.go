@@ -26,6 +26,10 @@ type Source interface {
 	Log(ctx context.Context, revRange string) ([]Commit, error)
 	// Diff returns the unified diff text for the given revision range.
 	Diff(ctx context.Context, revRange string) (string, error)
+	// DiffStaged returns the unified diff of staged (indexed, not yet
+	// committed) changes, like `git diff --cached`. An empty string means
+	// nothing is staged.
+	DiffStaged(ctx context.Context) (string, error)
 	// LatestTag returns the most recent reachable tag from HEAD (like
 	// `git describe --tags --abbrev=0`). An empty string with a nil error
 	// means no tags exist — a legitimate result, not a failure (see
@@ -70,6 +74,13 @@ func (r *Runner) Log(ctx context.Context, revRange string) ([]Commit, error) {
 // Diff runs `git diff` over revRange and returns the raw unified diff text.
 func (r *Runner) Diff(ctx context.Context, revRange string) (string, error) {
 	return r.run(ctx, "diff", revRange)
+}
+
+// DiffStaged runs `git diff --cached` and returns the unified diff of staged
+// changes. Nothing staged is not an error — git exits 0 with empty output, so
+// callers branch on the empty string.
+func (r *Runner) DiffStaged(ctx context.Context) (string, error) {
+	return r.run(ctx, "diff", "--cached")
 }
 
 // LatestTag runs `git describe --tags --abbrev=0` and returns the most recent

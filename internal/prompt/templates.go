@@ -23,6 +23,12 @@ type Review struct {
 	Range   string
 	Commits []gitlog.Commit
 	Diff    string
+	// Staged marks a review of staged (indexed, not yet committed) changes:
+	// there is no revision range and no commit metadata, only the diff. The
+	// user message then carries an explicit "staged changes" note instead of
+	// the range/commit sections. Zero value keeps the historical range-based
+	// prompt byte-identical.
+	Staged bool
 }
 
 // BuildReview renders the system and user messages for a review. The user
@@ -62,10 +68,17 @@ func BuildReviewWithTemplate(r Review, systemTemplateFile string) (system, user 
 func buildUserMessage(r Review) string {
 	var b strings.Builder
 
-	fmt.Fprintf(&b, "Review the git range `%s` (%d commit(s)).\n\n", r.Range, len(r.Commits))
+	if r.Staged {
+		b.WriteString("Review the staged changes (not yet committed).\n\n")
+	} else {
+		fmt.Fprintf(&b, "Review the git range `%s` (%d commit(s)).\n\n", r.Range, len(r.Commits))
+	}
 
 	b.WriteString("# Commits\n\n")
-	if len(r.Commits) == 0 {
+	switch {
+	case r.Staged:
+		b.WriteString("(staged changes — not yet committed, no commit history)\n\n")
+	case len(r.Commits) == 0:
 		b.WriteString("(no commits in range)\n\n")
 	}
 	for _, c := range r.Commits {
