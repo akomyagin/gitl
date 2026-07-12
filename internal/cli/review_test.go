@@ -74,6 +74,42 @@ func TestTruncateDiff(t *testing.T) {
 	}
 }
 
+// TestClassifyReviewArg: the mode classifier for the review positional
+// argument. Only a matching-but-invalid PR number (pr/0) is an error;
+// non-matching arguments (pr/-1, pr/abc, plain ranges) are ranges, never
+// errors — they fail later with the natural git error if bogus.
+func TestClassifyReviewArg(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		arg     string
+		isPR    bool
+		prNum   int
+		wantErr bool
+	}{
+		{"pr/42", true, 42, false},
+		{"pr/1", true, 1, false},
+		{"pr/0", false, 0, true},
+		{"pr/-1", false, 0, false},  // no pattern match → range
+		{"pr/abc", false, 0, false}, // no pattern match → range
+		{"pr/", false, 0, false},
+		{"HEAD~1..HEAD", false, 0, false},
+		{"main..feature", false, 0, false},
+	}
+	for _, tc := range tests {
+		isPR, prNum, err := classifyReviewArg(tc.arg)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("classifyReviewArg(%q) err = %v, wantErr %v", tc.arg, err, tc.wantErr)
+			continue
+		}
+		if tc.wantErr && !strings.Contains(err.Error(), "positive integer") {
+			t.Errorf("classifyReviewArg(%q) error should mention positive integer, got: %v", tc.arg, err)
+		}
+		if isPR != tc.isPR || prNum != tc.prNum {
+			t.Errorf("classifyReviewArg(%q) = (%v, %d), want (%v, %d)", tc.arg, isPR, prNum, tc.isPR, tc.prNum)
+		}
+	}
+}
+
 func TestBuildArtifactStats(t *testing.T) {
 	t.Parallel()
 	cfg := &config.Config{

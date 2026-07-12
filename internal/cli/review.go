@@ -6,6 +6,8 @@ import (
 	"io"
 	"log/slog"
 	"path"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -49,14 +51,19 @@ func (c *byteCountWriter) Write(p []byte) (int, error) {
 // newReviewCmd builds the `gitl review <range>` command.
 func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "review [<range>]",
-		Short: "AI review of a commit range (e.g. HEAD~5..HEAD) or staged changes",
+		Use:   "review [<range> | pr/<N>]",
+		Short: "AI review of a commit range (e.g. HEAD~5..HEAD), a GitHub PR (pr/N), or staged changes",
 		Long: "review runs `git log` + `git diff` over the given revision range, sends the\n" +
 			"result to an LLM, and prints a review (md/text/json) to stdout with a\n" +
 			"structured risk score.\n\n" +
+			"With pr/N (e.g. `gitl review pr/42`) it reviews a GitHub pull request by\n" +
+			"number: the PR's base/head SHAs are resolved via the GitHub CLI (`gh`,\n" +
+			"which must be installed and authenticated), the head is fetched locally\n" +
+			"via `pull/N/head` if needed (forks included), and the diff is computed\n" +
+			"from the merge-base (`base...head`) — the same diff GitHub shows.\n\n" +
 			"With --staged it reviews the staged (indexed, not yet committed) changes\n" +
 			"via `git diff --cached` instead — no revision range is needed, a natural\n" +
-			"pre-commit check. --staged and <range> are mutually exclusive.\n\n" +
+			"pre-commit check. --staged, <range>, and pr/N are mutually exclusive.\n\n" +
 			"Without an API key (GITL_API_KEY or llm.api_key) it falls back to a\n" +
 			"deterministic offline review and prints a warning to stderr.\n\n" +
 			"--dry-run prints a cost estimate and exits without calling the API.\n" +
@@ -69,15 +76,40 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 			}
 			switch {
 			case staged && len(args) > 0:
-				return fmt.Errorf("cannot combine --staged with a revision range: --staged reviews the index, a range reviews history — pick one")
+				return fmt.Errorf("cannot combine --staged with a revision range or pr/N: --staged reviews the index — pick one")
 			case !staged && len(args) == 0:
-				return fmt.Errorf("provide a revision range (e.g. HEAD~5..HEAD) or --staged to review staged changes")
+				return fmt.Errorf("provide a revision range (e.g. HEAD~5..HEAD), a PR number (pr/N), or --staged to review staged changes")
 			}
-			revRange := ""
-			if len(args) == 1 {
-				revRange = args[0]
+
+			ctx := cmd.Context()
+			runner, err := gitlog.NewRunner("")
+			if err != nil {
+				return err
 			}
-			return runReview(cmd.Context(), cmd, gf, revRange, staged)
+
+			var src diffSource
+			switch {
+			case staged:
+				src, err = stagedSource(ctx, runner)
+			default:
+				isPR, prNum, argErr := classifyReviewArg(args[0])
+				if argErr != nil {
+					return argErr
+				}
+				if isPR {
+					resolver, rErr := newPRResolver("")
+					if rErr != nil {
+						return rErr
+					}
+					src, err = prSource(ctx, runner, resolver, prNum)
+				} else {
+					src, err = rangeSource(ctx, runner, args[0])
+				}
+			}
+			if err != nil {
+				return err
+			}
+			return runReview(ctx, cmd, gf, src)
 		},
 	}
 
@@ -97,9 +129,148 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 	return cmd
 }
 
-// runReview executes the full review pipeline for one revision range, or for
-// the staged index when staged is true (revRange is then empty and ignored).
-func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRange string, staged bool) error {
+// prPattern matches the pr/N positional argument of `gitl review`. Negative
+// or non-numeric suffixes (pr/-1, pr/abc) deliberately do NOT match — they
+// fall through to range mode and fail with the natural git error.
+var prPattern = regexp.MustCompile(`^pr/(\d+)$`)
+
+// classifyReviewArg decides whether the positional argument selects PR mode
+// (pr/N) or a plain revision range. It only errors on a matching-but-invalid
+// PR number (pr/0 and numbers too large for int); anything that does not
+// match the pattern is a range, never an error.
+func classifyReviewArg(arg string) (isPR bool, prNum int, err error) {
+	m := prPattern.FindStringSubmatch(arg)
+	if m == nil {
+		return false, 0, nil
+	}
+	n, convErr := strconv.Atoi(m[1])
+	if convErr != nil || n < 1 {
+		return false, 0, fmt.Errorf("invalid PR number in %q (must be a positive integer)", arg)
+	}
+	return true, n, nil
+}
+
+// reviewMode discriminates how the diffSource was selected. An explicit field
+// rather than sniffing src.Label: a range like "pr/5..HEAD" (a real branch
+// named pr/5) must NOT be mistaken for PR mode by a string-prefix check.
+type reviewMode int
+
+const (
+	modeRange reviewMode = iota
+	modeStaged
+	modePR
+)
+
+// diffSource is the resolved input for one review, regardless of whether it
+// was selected by a git range, the index (--staged), or a PR number (pr/N).
+// runReview operates only on this — no per-mode branching downstream.
+type diffSource struct {
+	Commits []gitlog.Commit // empty for staged
+	Diff    string          // raw diff BEFORE shaping (exclude/truncate)
+	Label   string          // display label: "staged", "HEAD~5..HEAD", "pr/42"
+	Staged  bool            // switches prompt.Review to the staged user message
+	Mode    reviewMode      // which constructor produced this source
+}
+
+// stagedSource collects the staged (indexed) diff. An empty index is a clear
+// user error, not a silent empty review.
+func stagedSource(ctx context.Context, runner *gitlog.Runner) (diffSource, error) {
+	slog.Debug("collecting staged diff")
+	rawDiff, err := runner.DiffStaged(ctx)
+	if err != nil {
+		return diffSource{}, err
+	}
+	if strings.TrimSpace(rawDiff) == "" {
+		return diffSource{}, fmt.Errorf("no staged changes to review (stage files with `git add` first)")
+	}
+	return diffSource{Diff: rawDiff, Label: "staged", Staged: true, Mode: modeStaged}, nil
+}
+
+// rangeSource collects the historical log+diff pair for a revision range.
+func rangeSource(ctx context.Context, runner *gitlog.Runner, revRange string) (diffSource, error) {
+	slog.Debug("collecting git history", "range", revRange)
+	commits, err := runner.Log(ctx, revRange)
+	if err != nil {
+		return diffSource{}, err
+	}
+	if len(commits) == 0 {
+		return diffSource{}, fmt.Errorf("no commits found in range %q", revRange)
+	}
+	rawDiff, err := runner.Diff(ctx, revRange)
+	if err != nil {
+		return diffSource{}, err
+	}
+	return diffSource{Commits: commits, Diff: rawDiff, Label: revRange, Mode: modeRange}, nil
+}
+
+// prSource resolves a GitHub PR number into a local diff: SHAs come from the
+// resolver (gh), the head/base objects are fetched best-effort ONLY when not
+// already available locally, and the diff is the merge-base triple-dot
+// `base...head` — the exact diff GitHub shows for a PR. Commits are the PR's
+// own commits (`base..head`).
+func prSource(ctx context.Context, runner *gitlog.Runner, resolver PRResolver, prNum int) (diffSource, error) {
+	ref, err := resolver.ResolvePR(ctx, prNum)
+	if err != nil {
+		return diffSource{}, err
+	}
+	label := fmt.Sprintf("pr/%d", prNum)
+	slog.Debug("resolved pull request", "pr", label, "base", ref.BaseSHA, "head", ref.HeadSHA, "head_ref", ref.HeadRef, "cross_repo", ref.CrossRepo)
+
+	// gh resolves the PR against its own notion of the repository, which is
+	// NOT necessarily the remote named "origin" (fork workflows: origin = the
+	// fork, upstream = where the PR and its pull/N/head ref actually live).
+	// Match the PR's owner/repo against the local remotes; "origin" remains
+	// the fallback when nothing matches (single-remote case, GHE URLs, ...).
+	remote := "origin"
+	if owner, repo, ok := parseGitHubOwnerRepo(ref.URL); ok {
+		remote = resolveRemoteName(ctx, runner, owner, repo)
+	}
+
+	// Best-effort fetch: skip fetching objects already present locally. The
+	// pull/N/head refspec works for cross-repository (fork) PRs too. Each SHA
+	// is probed once up front and re-probed only after an actual fetch (a
+	// successful fetch does not guarantee the SHA: the PR may have been
+	// force-pushed between `gh pr view` and the fetch).
+	headOK := runner.ObjectExists(ctx, ref.HeadSHA)
+	if !headOK {
+		if err := runner.FetchRef(ctx, remote, fmt.Sprintf("pull/%d/head", prNum)); err != nil {
+			return diffSource{}, fmt.Errorf("fetching %s head: %w", label, err)
+		}
+		headOK = runner.ObjectExists(ctx, ref.HeadSHA)
+	}
+	baseOK := runner.ObjectExists(ctx, ref.BaseSHA)
+	if !baseOK {
+		// Fetch the base by branch name when gh reported one — bare-SHA
+		// fetches only work on servers with allowReachableSHA1InWant (github.com
+		// default, but not universal). Fall back to the SHA if the name is absent.
+		baseRef := ref.BaseRefName
+		if baseRef == "" {
+			baseRef = ref.BaseSHA
+		}
+		if err := runner.FetchRef(ctx, remote, baseRef); err != nil {
+			return diffSource{}, fmt.Errorf("fetching %s base: %w", label, err)
+		}
+		baseOK = runner.ObjectExists(ctx, ref.BaseSHA)
+	}
+	if !headOK || !baseOK {
+		return diffSource{}, fmt.Errorf("could not resolve PR #%d commits locally after fetching — your clone may be shallow (run `git fetch --unshallow`), or the PR may have been updated concurrently (retry)", prNum)
+	}
+
+	commits, err := runner.Log(ctx, ref.BaseSHA+".."+ref.HeadSHA)
+	if err != nil {
+		return diffSource{}, err
+	}
+	diff, err := runner.Diff(ctx, ref.BaseSHA+"..."+ref.HeadSHA)
+	if err != nil {
+		return diffSource{}, err
+	}
+	return diffSource{Commits: commits, Diff: diff, Label: label, Mode: modePR}, nil
+}
+
+// runReview executes the full review pipeline for one resolved diffSource
+// (range, staged index, or PR — the source constructors have already done the
+// per-mode collection and validation).
+func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src diffSource) error {
 	cfg, err := loadConfig(cmd, gf)
 	if err != nil {
 		return err
@@ -109,52 +280,27 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 		return err
 	}
 
-	runner, err := gitlog.NewRunner("")
-	if err != nil {
-		return err
-	}
-
-	// Staged mode has no commits (nothing is committed yet): the commit
-	// sections stay empty downstream (prompt, artifact) and the diff comes
-	// from the index. Range mode keeps the historical log+diff pair.
-	var (
-		commits []gitlog.Commit
-		rawDiff string
-	)
-	if staged {
-		// Label used wherever a range string is displayed (prompt header,
-		// artifact "range" field, JSON output).
-		revRange = "staged"
-		slog.Debug("collecting staged diff")
-		rawDiff, err = runner.DiffStaged(ctx)
-		if err != nil {
-			return err
-		}
-		if strings.TrimSpace(rawDiff) == "" {
-			return fmt.Errorf("no staged changes to review (stage files with `git add` first)")
-		}
-	} else {
-		slog.Debug("collecting git history", "range", revRange)
-		commits, err = runner.Log(ctx, revRange)
-		if err != nil {
-			return err
-		}
-		if len(commits) == 0 {
-			return fmt.Errorf("no commits found in range %q", revRange)
-		}
-		rawDiff, err = runner.Diff(ctx, revRange)
-		if err != nil {
-			return err
-		}
-	}
+	commits := src.Commits
 
 	// Config-driven diff shaping: drop excluded files, then truncate to
 	// max_diff_bytes with an explicit marker (§6).
 	excludeGlobs := mergedExcludeGlobs(cfg)
-	diff := filterDiffByGlobs(rawDiff, excludeGlobs)
+	diff := filterDiffByGlobs(src.Diff, excludeGlobs)
 	diff = truncateDiff(diff, cfg.Diff.MaxDiffBytes)
-	if staged && strings.TrimSpace(diff) == "" {
-		return fmt.Errorf("no staged changes to review: all staged files are excluded by exclude_globs")
+	// Post-shaping emptiness check for the non-range modes (staged, pr/N):
+	// their whole point is the diff, so an all-excluded diff is a clear user
+	// error, not a silent empty review. Dispatch on the explicit Mode, never
+	// on the label — a range over a branch literally named pr/5 must keep
+	// range semantics.
+	if strings.TrimSpace(diff) == "" {
+		switch src.Mode {
+		case modeStaged:
+			return fmt.Errorf("no staged changes to review: all staged files are excluded by exclude_globs")
+		case modePR:
+			return fmt.Errorf("no reviewable changes in %s: the PR diff is empty or all files are excluded by exclude_globs", src.Label)
+		case modeRange:
+			// Historical behavior: commit metadata alone can be worth reviewing.
+		}
 	}
 
 	// Custom prompt templates apply only when calling a real provider; the
@@ -165,10 +311,10 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 		systemTemplateFile = ""
 	}
 	system, user, err := prompt.BuildReviewWithTemplate(prompt.Review{
-		Range:   revRange,
+		Range:   src.Label,
 		Commits: commits,
 		Diff:    diff,
-		Staged:  staged,
+		Staged:  src.Staged,
 	}, systemTemplateFile)
 	if err != nil {
 		return fmt.Errorf("prompt template: %w", err)
@@ -193,7 +339,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 			cacheKey = llmcache.Key(cfg.LLM.Provider, cfg.LLM.Model, system, user)
 			if resp, ok, _ := cache.Get(cacheKey); ok {
 				slog.Debug("llm cache hit", "key", cacheKey[:12])
-				art := buildArtifact(cfg, revRange, commits, diff, resp)
+				art := buildArtifact(cfg, src.Label, commits, diff, resp)
 				if err := render.RenderWithTemplate(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
 					return err
 				}
@@ -285,7 +431,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, revRang
 		}
 	}
 
-	art := buildArtifact(cfg, revRange, commits, diff, resp)
+	art := buildArtifact(cfg, src.Label, commits, diff, resp)
 	if err := render.RenderWithTemplate(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
 		return err
 	}

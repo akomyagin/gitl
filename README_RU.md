@@ -41,6 +41,11 @@ go run ./cmd/gitl review HEAD~5..HEAD
 # ревью staged (ещё не закоммиченных) изменений перед `git commit`
 go run ./cmd/gitl review --staged
 
+# ревью GitHub PR по номеру — требуется `gh` CLI (установлен + залогинен);
+# base/head резолвятся через gh, при необходимости делается локальный fetch
+# `pull/N/head`, ревьюится diff от merge-base (base...head) — как показывает GitHub
+go run ./cmd/gitl review pr/42
+
 # машиночитаемый вывод для CI + гейтинг по риску
 go run ./cmd/gitl review HEAD~5..HEAD --format=json
 go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # ненулевой exit при высоком риске
