@@ -636,6 +636,42 @@ func TestAIChangelogArtifactDefensive(t *testing.T) {
 	}
 }
 
+// completeOnlyProvider implements llm.Provider but NOT llm.RawCompleter — the
+// shape of a hypothetical future provider without raw completion.
+type completeOnlyProvider struct{}
+
+func (completeOnlyProvider) Complete(context.Context, llm.Request) (llm.Response, error) {
+	return llm.Response{}, nil
+}
+
+// A provider that does not implement llm.RawCompleter must produce an explicit
+// "does not support raw completion" error from the changelog --ai path — never
+// a panic. Tested via rawCompleterFor, the exact check runChangelogAI performs
+// after newNetworkClient (which today always returns an *llm.Client, so the
+// full command path cannot reach this branch yet).
+func TestChangelogAIProviderWithoutRawCompletion(t *testing.T) {
+	t.Parallel()
+	rc, err := rawCompleterFor(completeOnlyProvider{}, "someprovider")
+	if err == nil {
+		t.Fatal("expected an error for a provider without RawCompleter, got nil")
+	}
+	if rc != nil {
+		t.Errorf("rc = %v, want nil on error", rc)
+	}
+	if !strings.Contains(err.Error(), `provider "someprovider" does not support raw completion`) {
+		t.Errorf("error should name the provider and the missing capability, got: %v", err)
+	}
+
+	// And the happy path: *llm.Client satisfies the capability.
+	client, cerr := llm.NewClient(llm.ClientConfig{Provider: "openai", BaseURL: "http://127.0.0.1:0", APIKey: "k"})
+	if cerr != nil {
+		t.Fatalf("NewClient: %v", cerr)
+	}
+	if _, err := rawCompleterFor(client, "openai"); err != nil {
+		t.Errorf("rawCompleterFor(*llm.Client) must succeed, got: %v", err)
+	}
+}
+
 // A breaking entry whose hashes are all invented is discarded like any other.
 func TestAIChangelogArtifactDropsInventedBreaking(t *testing.T) {
 	t.Parallel()

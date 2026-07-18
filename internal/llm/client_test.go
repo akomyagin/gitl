@@ -327,6 +327,14 @@ func TestClientCompleteRawReturnsContentVerbatim(t *testing.T) {
 	}
 }
 
+// TestRawCompleterInterfaceAssertion documents that the compile-time assertion
+// in client.go (var _ RawCompleter = (*Client)(nil)) holds — Client implements
+// the RawCompleter capability probed by changelog --ai.
+func TestRawCompleterInterfaceAssertion(t *testing.T) {
+	t.Parallel()
+	var _ RawCompleter = (*Client)(nil)
+}
+
 // CompleteRaw shares Complete's retry/backoff path.
 func TestClientCompleteRawRetriesThenSucceeds(t *testing.T) {
 	t.Parallel()
