@@ -98,7 +98,7 @@ func costGuard(cmd *cobra.Command, cfg *config.Config, promptText string) error 
 
 	if est.CostUSD > maxCost {
 		return fmt.Errorf(
-			"estimated cost %s exceeds --max-cost-usd=%g — increase the limit, use --dry-run to inspect, or omit the API key for a free offline review",
+			"estimated cost %s exceeds --max-cost-usd=%g — increase the limit, use --dry-run to inspect, or omit the API key for free offline output",
 			est.String(), maxCost)
 	}
 

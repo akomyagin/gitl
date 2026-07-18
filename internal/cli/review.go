@@ -490,7 +490,14 @@ func selectProvider(cmd *cobra.Command, cfg *config.Config, commits []gitlog.Com
 		fmt.Fprintln(cmd.ErrOrStderr(), "gitl: no LLM API key configured — using deterministic offline review (set GITL_API_KEY for an AI review).")
 		return llm.NewOffline(commits, diff), nil
 	}
+	return newNetworkClient(cfg)
+}
 
+// newNetworkClient builds the concrete network *llm.Client from config. Shared
+// by selectProvider (review) and the changelog --ai path, which needs the
+// concrete type for CompleteRaw and handles offline mode itself, before any
+// provider selection.
+func newNetworkClient(cfg *config.Config) (*llm.Client, error) {
 	return llm.NewClient(llm.ClientConfig{
 		Provider:   cfg.LLM.Provider,
 		BaseURL:    cfg.LLM.BaseURL,

@@ -11,7 +11,8 @@ repository's git history and turns it into a structured engineering artifact via
   custom system-prompt templates; `--staged` reviews staged (uncommitted) changes
   before `git commit`.
 - **`gitl changelog [<range>]`** — Keep a Changelog-style changelog, grouped by
-  conventional commits (defaults to last tag → `HEAD`);
+  conventional commits (defaults to last tag → `HEAD`); deterministic by default,
+  `--ai` optionally rewrites it with the model as readable release-note prose;
 - **`gitl digest [--days=N] [--repos=a,b,c]`** — activity summary by author/topic/file,
   including **multiple repositories in parallel**; interactive TUI viewer (`--tui`).
 
@@ -62,9 +63,16 @@ go run ./cmd/gitl review HEAD~5..HEAD --no-cache
 # disable streaming (non-interactive, buffered output)
 go run ./cmd/gitl review HEAD~5..HEAD --no-stream
 
-# changelog from last tag (or full history if no tags) — no LLM
+# changelog from last tag (or full history if no tags) — no LLM by default
 go run ./cmd/gitl changelog
 go run ./cmd/gitl changelog v1.2.0..HEAD --format=json
+
+# AI changelog: the model rewrites the grouped result as release-note prose and
+# reclassifies significant non-conventional commits out of "Other". Without an API
+# key (or on a malformed model response) it falls back to the deterministic
+# changelog with a warning — never fails. --dry-run/--max-cost-usd/--no-cache work
+# the same as for review.
+GITL_API_KEY=sk-... go run ./cmd/gitl changelog --ai
 
 # activity summary for the last N days — no LLM
 go run ./cmd/gitl digest --days=14
