@@ -5,8 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -144,15 +142,7 @@ func (c *AnthropicClient) Complete(ctx context.Context, req Request) (Response, 
 	if err != nil {
 		return Response{}, err
 	}
-
-	stripped, risk, ok := ParseRisk(content)
-	if !ok {
-		risk = HeuristicRisk(req.Commits, req.Diff)
-		risk.Heuristic = true
-		slog.Warn("model risk block missing or invalid; using heuristic fallback", "level", risk.Level)
-		stripped = strings.TrimRight(content, " \t\r\n") + "\n"
-	}
-	return Response{Content: stripped, Risk: risk}, nil
+	return finishWithRisk(content, req.Commits, req.Diff), nil
 }
 
 // CompleteRaw returns the assistant text verbatim — no risk-block parsing —
@@ -183,24 +173,11 @@ func (c *AnthropicClient) doOnce(ctx context.Context, body []byte) (string, erro
 	httpReq.Header.Set("x-api-key", c.apiKey)
 	httpReq.Header.Set("anthropic-version", c.version)
 
-	resp, err := c.httpClient.Do(httpReq)
+	// The API key travels only in the request header; a surfaced HTTP error
+	// carries just the status and Anthropic's own message.
+	respBody, err := doHTTPRoundTrip(ctx, httpReq, c.httpClient, ProviderAnthropic, anthropicErrorMessage, nil)
 	if err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("llm: request cancelled: %w", ctx.Err())
-		}
-		return "", &networkError{err: err}
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if err != nil {
-		return "", fmt.Errorf("llm: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		// The API key travels only in the request header; the surfaced error
-		// carries just the status and Anthropic's own message.
-		return "", classifyStatus(ProviderAnthropic, resp.StatusCode, anthropicErrorMessage(respBody))
+		return "", err
 	}
 
 	var parsed anthropicResponse

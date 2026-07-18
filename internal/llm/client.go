@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"math/rand"
 	"net/http"
@@ -228,15 +227,7 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
-
-	stripped, risk, ok := ParseRisk(content)
-	if !ok {
-		risk = HeuristicRisk(req.Commits, req.Diff)
-		risk.Heuristic = true
-		slog.Warn("model risk block missing or invalid; using heuristic fallback", "level", risk.Level)
-		stripped = strings.TrimRight(content, " \t\r\n") + "\n"
-	}
-	return Response{Content: stripped, Risk: risk}, nil
+	return finishWithRisk(content, req.Commits, req.Diff), nil
 }
 
 // CompleteRaw sends a chat/completions request with the same retry/backoff as
@@ -308,23 +299,9 @@ func (c *Client) doOnce(ctx context.Context, body []byte) (string, error) {
 		return "", err
 	}
 
-	resp, err := c.httpClient.Do(httpReq)
+	respBody, err := doHTTPRoundTrip(ctx, httpReq, c.httpClient, c.provider, extractErrorMessage, nil)
 	if err != nil {
-		// Network/transport errors are retryable (unless the context is done).
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("llm: request cancelled: %w", ctx.Err())
-		}
-		return "", &networkError{err: err}
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if err != nil {
-		return "", fmt.Errorf("llm: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", classifyStatus(c.provider, resp.StatusCode, extractErrorMessage(respBody))
+		return "", err
 	}
 
 	var parsed chatResponse
