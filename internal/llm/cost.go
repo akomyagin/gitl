@@ -41,6 +41,17 @@ var pricingTable = map[string]Pricing{
 	"gpt-4o-mini":  {InputPer1M: 0.15, OutputPer1M: 0.60},
 	"gpt-4o":       {InputPer1M: 2.50, OutputPer1M: 10.00},
 	"gpt-4.1-mini": {InputPer1M: 0.40, OutputPer1M: 1.60},
+	// Anthropic Claude (sticker prices per 1M tokens as of 2026-06; verify
+	// against https://www.anthropic.com/pricing before a release).
+	"claude-opus-4-8":   {InputPer1M: 5.00, OutputPer1M: 25.00},
+	"claude-sonnet-5":   {InputPer1M: 3.00, OutputPer1M: 15.00},
+	"claude-sonnet-4-6": {InputPer1M: 3.00, OutputPer1M: 15.00},
+	"claude-haiku-4-5":  {InputPer1M: 1.00, OutputPer1M: 5.00},
+	// Google Gemini (Google AI Studio paid tier, ≤200k-token prompts; verify
+	// against https://ai.google.dev/pricing before a release).
+	"gemini-2.5-pro":   {InputPer1M: 1.25, OutputPer1M: 10.00},
+	"gemini-2.5-flash": {InputPer1M: 0.30, OutputPer1M: 2.50},
+	"gemini-2.0-flash": {InputPer1M: 0.10, OutputPer1M: 0.40},
 }
 
 // LookupPricing returns the built-in pricing for a model and whether it was

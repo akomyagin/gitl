@@ -3,12 +3,15 @@
 // docs/TECHNICAL_PLAN.md §2), and provides a deterministic offline provider
 // used when no API key is configured.
 //
-// Both implementations satisfy the Provider interface, which is justified here
-// because there are genuinely two implementations (project rule: "the interface
-// appears at the second implementation, not the first"). The three supported
-// wire providers — openai, ollama, azure_openai — are branches inside the one
-// Client type (different endpoint/auth shapes, same request/response JSON), not
-// separate Provider implementations.
+// All implementations satisfy the Provider interface, which is justified here
+// because there are genuinely multiple implementations (project rule: "the
+// interface appears at the second implementation, not the first"). The three
+// OpenAI-shaped wire providers — openai, ollama, azure_openai — are branches
+// inside the one Client type (different endpoint/auth shapes, same
+// request/response JSON). Anthropic (AnthropicClient) and Google Gemini
+// (GeminiClient) are separate Provider implementations: their wire formats
+// differ fundamentally from chat/completions, so branching inside Client would
+// have meant per-branch request/response types anyway.
 //
 // SSE streaming remains out of scope and lands post-MVP (see
 // docs/TECHNICAL_PLAN.md §6).

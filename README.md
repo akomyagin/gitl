@@ -18,7 +18,8 @@ repository's git history and turns it into a structured engineering artifact via
 
 A clean CLI binary plus a GitHub Action wrapper — no server, no database, no hosted key
 storage. **BYOK** (bring your own key) with multi-provider support: OpenAI-compatible API,
-Ollama (local/self-hosted), Azure OpenAI. No telemetry.
+Ollama (local/self-hosted), Azure OpenAI, native Anthropic (Claude), Google Gemini.
+No telemetry.
 
 > **Status:** `v0.3.1` released — all three commands work on real repositories with all
 > three output formats (`md|text|json`). The Action posts AI reviews as sticky PR comments
@@ -147,6 +148,20 @@ llm:
     endpoint: "https://<resource>.openai.azure.com"
     deployment: "<deployment-name>"
     api_version: "2024-08-01-preview"
+
+# Anthropic (native Claude Messages API)
+llm:
+  provider: "anthropic"
+  api_key: ""            # or env GITL_API_KEY
+  model: "claude-sonnet-4-6"
+  # base_url optional; defaults to https://api.anthropic.com
+
+# Google Gemini (Google AI Studio)
+llm:
+  provider: "gemini"
+  api_key: ""            # or env GITL_API_KEY
+  model: "gemini-2.5-flash"
+  # base_url optional; defaults to https://generativelanguage.googleapis.com/v1beta
 ```
 
 ### Streaming (`output.stream`)

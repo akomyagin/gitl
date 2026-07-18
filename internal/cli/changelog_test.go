@@ -690,3 +690,95 @@ func TestAIChangelogArtifactDropsInventedBreaking(t *testing.T) {
 		t.Errorf("Fixed = %+v", art.Categories[gitlog.CategoryFixed])
 	}
 }
+
+// ---- changelog --ai over the native providers (Anthropic / Gemini) ----
+
+// TestChangelogAIAnthropicEndToEnd runs changelog --ai against a mock
+// Anthropic Messages API endpoint, exercising the full dispatch chain:
+// newNetworkClient → *llm.AnthropicClient → RawCompleter → changelog parsing.
+func TestChangelogAIAnthropicEndToEnd(t *testing.T) {
+	dir := setupChangelogRepo(t)
+	hashes := gitShortHashes(t, dir) // newest first: [docs C, fix B, feat A]
+	content := aiChangelogContent(hashes[2], hashes[1])
+
+	calls := &atomic.Int32{}
+	var gotPath, gotAPIKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		gotPath = r.URL.Path
+		gotAPIKey = r.Header.Get("x-api-key")
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"content":     []map[string]any{{"type": "text", "text": content}},
+			"stop_reason": "end_turn",
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			panic(fmt.Sprintf("encode mock response: %v", err))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("GITL_API_KEY", "sk-ant-fake")
+
+	out, stderr, err := runChangelogInDir(t, dir, "--ai", "--provider", "anthropic", "--base-url", srv.URL, "--no-cache")
+	if err != nil {
+		t.Fatalf("changelog --ai (anthropic): %v\nstderr:\n%s", err, stderr)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("server saw %d request(s), want 1", calls.Load())
+	}
+	if gotPath != "/v1/messages" {
+		t.Errorf("path = %q, want /v1/messages", gotPath)
+	}
+	if gotAPIKey != "sk-ant-fake" {
+		t.Errorf("x-api-key = %q, want sk-ant-fake", gotAPIKey)
+	}
+	if !strings.Contains(out, "Brand new feature A") || !strings.Contains(out, "Corrected bug in B") {
+		t.Errorf("AI prose missing from output:\n%s", out)
+	}
+}
+
+// TestChangelogAIGeminiEndToEnd runs changelog --ai against a mock Google AI
+// Studio generateContent endpoint (query-parameter auth, contents/parts wire
+// shape) through the same dispatch chain.
+func TestChangelogAIGeminiEndToEnd(t *testing.T) {
+	dir := setupChangelogRepo(t)
+	hashes := gitShortHashes(t, dir)
+	content := aiChangelogContent(hashes[2], hashes[1])
+
+	calls := &atomic.Int32{}
+	var gotPath, gotKey string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		gotPath = r.URL.Path
+		gotKey = r.URL.Query().Get("key")
+		w.Header().Set("Content-Type", "application/json")
+		resp := map[string]any{
+			"candidates": []map[string]any{{
+				"content":      map[string]any{"parts": []map[string]any{{"text": content}}},
+				"finishReason": "STOP",
+			}},
+		}
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			panic(fmt.Sprintf("encode mock response: %v", err))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	t.Setenv("GITL_API_KEY", "AIza-fake")
+
+	out, stderr, err := runChangelogInDir(t, dir, "--ai", "--provider", "gemini", "--base-url", srv.URL, "--no-cache")
+	if err != nil {
+		t.Fatalf("changelog --ai (gemini): %v\nstderr:\n%s", err, stderr)
+	}
+	if calls.Load() != 1 {
+		t.Errorf("server saw %d request(s), want 1", calls.Load())
+	}
+	if !strings.HasPrefix(gotPath, "/models/") || !strings.HasSuffix(gotPath, ":generateContent") {
+		t.Errorf("path = %q, want /models/<model>:generateContent", gotPath)
+	}
+	if gotKey != "AIza-fake" {
+		t.Errorf("?key= = %q, want AIza-fake", gotKey)
+	}
+	if !strings.Contains(out, "Brand new feature A") || !strings.Contains(out, "Corrected bug in B") {
+		t.Errorf("AI prose missing from output:\n%s", out)
+	}
+}

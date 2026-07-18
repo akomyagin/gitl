@@ -119,9 +119,10 @@ func TestReviewUnsupportedProviderFails(t *testing.T) {
 	dir := setupCLIRepo(t)
 	t.Setenv("GITL_API_KEY", "sk-configured") // online mode → provider matters
 
-	// "gemini" is not one of the three supported providers (openai/ollama/
-	// azure_openai) — a real configuration error, caught before any request.
-	repoCfg := "llm:\n  provider: gemini\n"
+	// "not-a-provider" is not one of the supported providers (openai/ollama/
+	// azure_openai/anthropic/gemini) — a real configuration error, caught
+	// before any request.
+	repoCfg := "llm:\n  provider: not-a-provider\n"
 	if err := os.WriteFile(filepath.Join(dir, ".gitl.yaml"), []byte(repoCfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
