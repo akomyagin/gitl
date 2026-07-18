@@ -19,7 +19,8 @@
 
 Чистый CLI-бинарник плюс GitHub Action-обёртка — без сервера, БД и хостинга ключей.
 **BYOK** (bring your own key) и мультипровайдерность: OpenAI-совместимый API,
-Ollama (локально/self-hosted), Azure OpenAI. Без телеметрии.
+Ollama (локально/self-hosted), Azure OpenAI, нативный Anthropic (Claude),
+Google Gemini. Без телеметрии.
 
 > **Статус:** выпущен `v0.3.1` — все три команды работают на реальных репозиториях,
 > все три формата вывода (`md|text|json`); Action оставляет AI-ревью sticky-комментарием
@@ -151,6 +152,20 @@ llm:
     endpoint: "https://<resource>.openai.azure.com"
     deployment: "<deployment-name>"
     api_version: "2024-08-01-preview"
+
+# Anthropic (нативный Claude Messages API)
+llm:
+  provider: "anthropic"
+  api_key: ""            # или env GITL_API_KEY
+  model: "claude-sonnet-4-6"
+  # base_url необязателен; по умолчанию https://api.anthropic.com
+
+# Google Gemini (Google AI Studio)
+llm:
+  provider: "gemini"
+  api_key: ""            # или env GITL_API_KEY
+  model: "gemini-2.5-flash"
+  # base_url необязателен; по умолчанию https://generativelanguage.googleapis.com/v1beta
 ```
 
 ### Стриминг (`output.stream`)

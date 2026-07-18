@@ -115,7 +115,7 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 
 	// Flags bound into config (see config.bindChangedFlags). Only override
 	// config when explicitly set.
-	cmd.Flags().String("provider", "", "LLM provider (openai | ollama | azure_openai)")
+	cmd.Flags().String("provider", "", "LLM provider (openai | ollama | azure_openai | anthropic | gemini)")
 	cmd.Flags().String("model", "", "model name")
 	cmd.Flags().String("base-url", "", "LLM API base URL")
 	cmd.Flags().String("format", "", "output format (md | text | json)")
@@ -497,21 +497,32 @@ func selectProvider(cmd *cobra.Command, cfg *config.Config, commits []gitlog.Com
 // llm.Provider interface. Shared by selectProvider (review) and the changelog
 // --ai path (which handles offline mode itself, before any provider selection,
 // and probes the result for the llm.RawCompleter capability). Returning the
-// interface rather than the concrete *llm.Client keeps the signature stable
-// when future providers with different concrete types are dispatched here.
+// interface keeps the signature stable across the concrete provider types
+// dispatched here: *llm.AnthropicClient, *llm.GeminiClient, and *llm.Client
+// (the OpenAI-compatible family — openai/ollama/azure_openai).
 func newNetworkClient(cfg *config.Config) (llm.Provider, error) {
-	return llm.NewClient(llm.ClientConfig{
+	base := llm.ClientConfig{
 		Provider:   cfg.LLM.Provider,
 		BaseURL:    cfg.LLM.BaseURL,
 		APIKey:     cfg.LLM.APIKey,
 		Timeout:    cfg.LLM.Timeout(),
 		MaxRetries: cfg.LLM.MaxRetries,
-		Azure: llm.AzureConfig{
+	}
+	switch cfg.LLM.Provider {
+	case llm.ProviderAnthropic:
+		return llm.NewAnthropicClient(base)
+	case llm.ProviderGemini:
+		return llm.NewGeminiClient(base)
+	default:
+		// openai / ollama / azure_openai share one OpenAI-shaped Client;
+		// llm.NewClient rejects anything else as a configuration error.
+		base.Azure = llm.AzureConfig{
 			Endpoint:   cfg.LLM.AzureOpenAI.Endpoint,
 			Deployment: cfg.LLM.AzureOpenAI.Deployment,
 			APIVersion: cfg.LLM.AzureOpenAI.APIVersion,
-		},
-	})
+		}
+		return llm.NewClient(base)
+	}
 }
 
 // mergedExcludeGlobs combines the personal diff.exclude_globs with the repo

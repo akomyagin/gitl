@@ -196,3 +196,53 @@ func TestFailErrorMessage(t *testing.T) {
 		t.Errorf("failError message unhelpful: %q", e.Error())
 	}
 }
+
+// TestNewNetworkClientDispatchesByProvider verifies that newNetworkClient
+// routes each llm.provider value to its concrete client type: the new native
+// providers get their own implementations, everything OpenAI-shaped stays on
+// *llm.Client, and an unknown provider is a configuration error.
+func TestNewNetworkClientDispatchesByProvider(t *testing.T) {
+	t.Parallel()
+
+	newCfg := func(provider string) *config.Config {
+		cfg := &config.Config{}
+		cfg.LLM.Provider = provider
+		cfg.LLM.APIKey = "test-key"
+		cfg.LLM.BaseURL = "http://localhost:1"
+		return cfg
+	}
+
+	if p, err := newNetworkClient(newCfg("anthropic")); err != nil {
+		t.Errorf("anthropic: %v", err)
+	} else if _, ok := p.(*llm.AnthropicClient); !ok {
+		t.Errorf("anthropic dispatched to %T, want *llm.AnthropicClient", p)
+	}
+
+	if p, err := newNetworkClient(newCfg("gemini")); err != nil {
+		t.Errorf("gemini: %v", err)
+	} else if _, ok := p.(*llm.GeminiClient); !ok {
+		t.Errorf("gemini dispatched to %T, want *llm.GeminiClient", p)
+	}
+
+	if p, err := newNetworkClient(newCfg("openai")); err != nil {
+		t.Errorf("openai: %v", err)
+	} else if _, ok := p.(*llm.Client); !ok {
+		t.Errorf("openai dispatched to %T, want *llm.Client", p)
+	}
+
+	if _, err := newNetworkClient(newCfg("not-a-provider")); err == nil {
+		t.Error("expected error for unknown provider, got nil")
+	}
+
+	// Both native clients must expose the RawCompleter capability so
+	// changelog --ai works with them (probed via rawCompleterFor).
+	for _, provider := range []string{"anthropic", "gemini"} {
+		p, err := newNetworkClient(newCfg(provider))
+		if err != nil {
+			t.Fatalf("%s: %v", provider, err)
+		}
+		if _, err := rawCompleterFor(p, provider); err != nil {
+			t.Errorf("rawCompleterFor(%s) must succeed, got: %v", provider, err)
+		}
+	}
+}

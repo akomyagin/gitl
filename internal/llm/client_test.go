@@ -24,11 +24,20 @@ func respondOK(w http.ResponseWriter, content string) {
 
 func TestNewClientRejectsUnknownProvider(t *testing.T) {
 	t.Parallel()
-	if _, err := NewClient(ClientConfig{Provider: "gemini", BaseURL: "http://x"}); err == nil {
+	if _, err := NewClient(ClientConfig{Provider: "not-a-provider", BaseURL: "http://x"}); err == nil {
 		t.Error("expected error for unknown provider, got nil")
 	}
 	if _, err := NewClient(ClientConfig{Provider: "", BaseURL: "http://x"}); err == nil {
 		t.Error("expected error for empty provider, got nil")
+	}
+	// anthropic/gemini are valid gitl providers, but they are dispatched to
+	// their own client types by cli.newNetworkClient and must never reach the
+	// OpenAI-shaped Client — NewClient keeps rejecting them.
+	if _, err := NewClient(ClientConfig{Provider: ProviderAnthropic, BaseURL: "http://x", APIKey: "k"}); err == nil {
+		t.Error("NewClient must reject anthropic (handled by AnthropicClient), got nil")
+	}
+	if _, err := NewClient(ClientConfig{Provider: ProviderGemini, BaseURL: "http://x", APIKey: "k"}); err == nil {
+		t.Error("NewClient must reject gemini (handled by GeminiClient), got nil")
 	}
 }
 

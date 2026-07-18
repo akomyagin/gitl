@@ -47,7 +47,7 @@ func newChangelogCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().Bool("ai", false, "rewrite the grouped changelog with the LLM (falls back to deterministic without an API key)")
 	// Flags bound into config (see config.bindChangedFlags), same set as review
 	// minus review-only concerns; only override config when explicitly set.
-	cmd.Flags().String("provider", "", "LLM provider (openai | ollama | azure_openai); only used with --ai")
+	cmd.Flags().String("provider", "", "LLM provider (openai | ollama | azure_openai | anthropic | gemini); only used with --ai")
 	cmd.Flags().String("model", "", "model name; only used with --ai")
 	cmd.Flags().String("base-url", "", "LLM API base URL; only used with --ai")
 	cmd.Flags().Float64("max-cost-usd", 0, "block the request if the estimated cost exceeds this (<=0 disables the guard); only used with --ai")
