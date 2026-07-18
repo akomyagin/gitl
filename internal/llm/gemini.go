@@ -6,8 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -161,15 +159,7 @@ func (c *GeminiClient) Complete(ctx context.Context, req Request) (Response, err
 	if err != nil {
 		return Response{}, err
 	}
-
-	stripped, risk, ok := ParseRisk(content)
-	if !ok {
-		risk = HeuristicRisk(req.Commits, req.Diff)
-		risk.Heuristic = true
-		slog.Warn("model risk block missing or invalid; using heuristic fallback", "level", risk.Level)
-		stripped = strings.TrimRight(content, " \t\r\n") + "\n"
-	}
-	return Response{Content: stripped, Risk: risk}, nil
+	return finishWithRisk(content, req.Commits, req.Diff), nil
 }
 
 // CompleteRaw returns the model text verbatim — no risk-block parsing —
@@ -202,24 +192,13 @@ func (c *GeminiClient) doOnce(ctx context.Context, model string, body []byte) (s
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(httpReq)
+	// redactGeminiURLError is passed so a transport-level *url.Error (which
+	// stringifies the full ?key= URL) is redacted before it is wrapped as a
+	// retryable networkError — keeping the key out of logs while preserving
+	// retry classification.
+	respBody, err := doHTTPRoundTrip(ctx, httpReq, c.httpClient, ProviderGemini, geminiErrorMessage, redactGeminiURLError)
 	if err != nil {
-		if ctx.Err() != nil {
-			return "", fmt.Errorf("llm: request cancelled: %w", ctx.Err())
-		}
-		// Transport errors are *url.Error values whose message contains the
-		// full request URL, ?key= included — redact before wrapping.
-		return "", &networkError{err: redactGeminiURLError(err)}
-	}
-	defer resp.Body.Close()
-
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes))
-	if err != nil {
-		return "", fmt.Errorf("llm: read response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return "", classifyStatus(ProviderGemini, resp.StatusCode, geminiErrorMessage(respBody))
+		return "", err
 	}
 
 	var parsed geminiResponse
