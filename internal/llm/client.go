@@ -31,7 +31,10 @@ type Client struct {
 	maxRetries int
 }
 
-var _ Provider = (*Client)(nil)
+var (
+	_ Provider     = (*Client)(nil)
+	_ RawCompleter = (*Client)(nil)
+)
 
 // AzureConfig holds the Azure OpenAI-specific endpoint coordinates, required
 // only when provider == "azure_openai".
@@ -241,10 +244,12 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 // heuristic fallback. It exists for prompts whose response contract is not the
 // review risk block (e.g. changelog --ai's ```changelog payload): running
 // ParseRisk over such a response would log a spurious "risk block missing"
-// warning and compute a meaningless heuristic score. Deliberately a *Client
-// method rather than part of the Provider interface: the offline path never
-// reaches the network client (callers fall back to deterministic output before
-// selecting a provider at all).
+// warning and compute a meaningless heuristic score. It implements the
+// RawCompleter capability interface (the same scheme Streamer already uses):
+// callers probe for it with a type assertion rather than depending on the
+// concrete *Client type, and the base Provider interface stays untouched —
+// the Offline provider deliberately does not implement it (callers fall back
+// to deterministic output before selecting a provider at all).
 func (c *Client) CompleteRaw(ctx context.Context, req Request) (string, error) {
 	body, err := marshalChatRequest(req)
 	if err != nil {
@@ -253,21 +258,33 @@ func (c *Client) CompleteRaw(ctx context.Context, req Request) (string, error) {
 	return c.doWithRetry(ctx, body)
 }
 
-// doWithRetry performs the HTTP request with exponential backoff + jitter,
-// retrying only retryable failures up to maxRetries. Retry sleeps respect ctx
-// cancellation so Ctrl-C / timeout interrupts a pending retry immediately.
+// doWithRetry wraps retry with the doOnce round-trip closure (backoff/jitter
+// details are documented on retry itself).
 func (c *Client) doWithRetry(ctx context.Context, body []byte) (string, error) {
+	return retry(ctx, c.maxRetries, func(ctx context.Context) (string, error) {
+		return c.doOnce(ctx, body)
+	})
+}
+
+// retry runs once — a single request/response round trip — up to 1+maxRetries
+// times with exponential backoff + jitter between attempts, retrying only
+// failures classified retryable by isRetryable (429/5xx/network). Backoff
+// sleeps respect ctx cancellation so Ctrl-C / timeout interrupts a pending
+// retry immediately. It is a package-level function, parameterized by the
+// round-trip closure, so any provider implementation can reuse the one
+// backoff loop instead of duplicating it.
+func retry(ctx context.Context, maxRetries int, once func(context.Context) (string, error)) (string, error) {
 	var lastErr error
 	// Attempts: 1 initial + maxRetries retries.
-	for attempt := 0; attempt <= c.maxRetries; attempt++ {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
 			if err := sleepWithBackoff(ctx, attempt); err != nil {
 				return "", err
 			}
-			slog.Debug("retrying LLM request", "attempt", attempt, "max_retries", c.maxRetries)
+			slog.Debug("retrying LLM request", "attempt", attempt, "max_retries", maxRetries)
 		}
 
-		content, err := c.doOnce(ctx, body)
+		content, err := once(ctx)
 		if err == nil {
 			return content, nil
 		}
@@ -281,7 +298,7 @@ func (c *Client) doWithRetry(ctx context.Context, body []byte) (string, error) {
 			return "", err
 		}
 	}
-	return "", fmt.Errorf("llm: giving up after %d attempt(s): %w", c.maxRetries+1, lastErr)
+	return "", fmt.Errorf("llm: giving up after %d attempt(s): %w", maxRetries+1, lastErr)
 }
 
 // doOnce performs a single request/response round trip.

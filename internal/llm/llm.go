@@ -67,3 +67,15 @@ type Response struct {
 type Provider interface {
 	Complete(ctx context.Context, req Request) (Response, error)
 }
+
+// RawCompleter is an optional capability for providers that can return the
+// assistant text verbatim, without the review risk-block parsing that Complete
+// performs. It mirrors Streamer: an optional capability probed via a type
+// assertion (provider.(llm.RawCompleter)), not part of the base Provider
+// interface. changelog --ai uses it because ParseRisk over a ```changelog
+// payload would log a spurious "risk block missing" warning and compute a
+// meaningless heuristic. The Offline provider deliberately does NOT implement
+// it — changelog falls back to the deterministic path before provider selection.
+type RawCompleter interface {
+	CompleteRaw(ctx context.Context, req Request) (string, error)
+}

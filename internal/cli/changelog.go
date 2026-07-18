@@ -169,13 +169,17 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 		return true, err
 	}
 
-	client, err := newNetworkClient(cfg)
+	provider, err := newNetworkClient(cfg)
+	if err != nil {
+		return true, err
+	}
+	rc, err := rawCompleterFor(provider, cfg.LLM.Provider)
 	if err != nil {
 		return true, err
 	}
 
 	slog.Debug("requesting AI changelog", "commits", len(commits))
-	content, err := client.CompleteRaw(ctx, llm.Request{
+	content, err := rc.CompleteRaw(ctx, llm.Request{
 		System:      system,
 		User:        user,
 		Model:       cfg.LLM.Model,
@@ -199,6 +203,19 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 	}
 
 	return true, renderAIChangelog(cmd, cfg, revRange, commits, payload)
+}
+
+// rawCompleterFor probes provider for the llm.RawCompleter capability — the
+// same optional-interface scheme review uses for llm.Streamer. A provider
+// without raw completion is an explicit, understandable error — never a panic.
+// It is only reachable if a future provider does not implement raw completion:
+// the offline path is already cut off before provider selection.
+func rawCompleterFor(provider llm.Provider, providerName string) (llm.RawCompleter, error) {
+	rc, ok := provider.(llm.RawCompleter)
+	if !ok {
+		return nil, fmt.Errorf("changelog --ai: provider %q does not support raw completion", providerName)
+	}
+	return rc, nil
 }
 
 // renderAIChangelog converts the parsed model payload into the standard

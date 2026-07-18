@@ -493,11 +493,13 @@ func selectProvider(cmd *cobra.Command, cfg *config.Config, commits []gitlog.Com
 	return newNetworkClient(cfg)
 }
 
-// newNetworkClient builds the concrete network *llm.Client from config. Shared
-// by selectProvider (review) and the changelog --ai path, which needs the
-// concrete type for CompleteRaw and handles offline mode itself, before any
-// provider selection.
-func newNetworkClient(cfg *config.Config) (*llm.Client, error) {
+// newNetworkClient builds the network provider from config, returned as the
+// llm.Provider interface. Shared by selectProvider (review) and the changelog
+// --ai path (which handles offline mode itself, before any provider selection,
+// and probes the result for the llm.RawCompleter capability). Returning the
+// interface rather than the concrete *llm.Client keeps the signature stable
+// when future providers with different concrete types are dispatched here.
+func newNetworkClient(cfg *config.Config) (llm.Provider, error) {
 	return llm.NewClient(llm.ClientConfig{
 		Provider:   cfg.LLM.Provider,
 		BaseURL:    cfg.LLM.BaseURL,
