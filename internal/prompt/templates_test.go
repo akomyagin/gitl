@@ -154,3 +154,82 @@ func TestBuildReviewStagedDeterministic(t *testing.T) {
 		t.Error("BuildReview(staged) is not deterministic")
 	}
 }
+
+func sampleChangelog() Changelog {
+	commits := []gitlog.Commit{
+		{Hash: "aaaaaaa1111111", Subject: "feat: add feature A", Body: "body line"},
+		{Hash: "bbbbbbb2222222", Subject: "improve startup time"},
+	}
+	return Changelog{
+		Range:   "v1.0.0..HEAD",
+		Commits: commits,
+		Grouped: gitlog.CategorizeCommits(commits),
+	}
+}
+
+func TestBuildChangelog(t *testing.T) {
+	t.Parallel()
+	system, user := BuildChangelog(sampleChangelog())
+
+	for _, want := range []string{"release-notes editor", "```changelog", "Never invent"} {
+		if !strings.Contains(system, want) {
+			t.Errorf("system prompt missing %q\n---\n%s", want, system)
+		}
+	}
+	for _, want := range []string{
+		"v1.0.0..HEAD",
+		"aaaaaaa feat: add feature A", // full commit list, short hash
+		"  > body line",               // body quoted
+		"bbbbbbb improve startup time",
+		"# Deterministic grouping (starting point)",
+		"### Added",
+		"- add feature A (aaaaaaa)", // grouping uses the stripped subject
+		"### Other",                 // non-conventional commit lands in Other
+	} {
+		if !strings.Contains(user, want) {
+			t.Errorf("user prompt missing %q\n---\n%s", want, user)
+		}
+	}
+}
+
+func TestBuildChangelogDeterministic(t *testing.T) {
+	t.Parallel()
+	system1, user1 := BuildChangelog(sampleChangelog())
+	system2, user2 := BuildChangelog(sampleChangelog())
+	if system1 != system2 || user1 != user2 {
+		t.Error("BuildChangelog is not deterministic")
+	}
+}
+
+func TestBuildChangelogWithTemplateCustom(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "sys.tmpl")
+	if err := os.WriteFile(path, []byte("Changelog for {{ .Range }} with {{ len .Commits }} commit(s)."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	system, user, err := BuildChangelogWithTemplate(sampleChangelog(), path)
+	if err != nil {
+		t.Fatalf("BuildChangelogWithTemplate: %v", err)
+	}
+	if system != "Changelog for v1.0.0..HEAD with 2 commit(s)." {
+		t.Errorf("system = %q", system)
+	}
+	// The user message is identical to the default builder's.
+	_, defUser := BuildChangelog(sampleChangelog())
+	if user != defUser {
+		t.Error("user message must not depend on the system template")
+	}
+}
+
+func TestBuildChangelogWithTemplateEmptyPathUsesDefault(t *testing.T) {
+	t.Parallel()
+	system, user, err := BuildChangelogWithTemplate(sampleChangelog(), "")
+	if err != nil {
+		t.Fatalf("BuildChangelogWithTemplate: %v", err)
+	}
+	defSystem, defUser := BuildChangelog(sampleChangelog())
+	if system != defSystem || user != defUser {
+		t.Error("empty template path must be identical to BuildChangelog")
+	}
+}

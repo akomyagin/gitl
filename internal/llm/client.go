@@ -190,12 +190,8 @@ func (c *Client) buildRequest(ctx context.Context, body []byte) (*http.Request, 
 	return httpReq, nil
 }
 
-// Complete sends a chat/completions request (with retry/backoff) and returns the
-// assistant text plus a risk score. If the model's trailing risk block is
-// missing or invalid, the deterministic heuristic (§7.3) supplies the risk and
-// a warning is logged. The context (carrying the configured timeout and Ctrl-C
-// cancellation) is threaded through the HTTP call and the retry sleeps.
-func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
+// marshalChatRequest builds the wire body shared by Complete and CompleteRaw.
+func marshalChatRequest(req Request) ([]byte, error) {
 	messages := make([]chatMessage, 0, 2)
 	if req.System != "" {
 		messages = append(messages, chatMessage{Role: "system", Content: req.System})
@@ -209,7 +205,20 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 		Temperature: req.Temperature,
 	})
 	if err != nil {
-		return Response{}, fmt.Errorf("llm: marshal request: %w", err)
+		return nil, fmt.Errorf("llm: marshal request: %w", err)
+	}
+	return body, nil
+}
+
+// Complete sends a chat/completions request (with retry/backoff) and returns the
+// assistant text plus a risk score. If the model's trailing risk block is
+// missing or invalid, the deterministic heuristic (§7.3) supplies the risk and
+// a warning is logged. The context (carrying the configured timeout and Ctrl-C
+// cancellation) is threaded through the HTTP call and the retry sleeps.
+func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
+	body, err := marshalChatRequest(req)
+	if err != nil {
+		return Response{}, err
 	}
 
 	content, err := c.doWithRetry(ctx, body)
@@ -225,6 +234,23 @@ func (c *Client) Complete(ctx context.Context, req Request) (Response, error) {
 		stripped = strings.TrimRight(content, " \t\r\n") + "\n"
 	}
 	return Response{Content: stripped, Risk: risk}, nil
+}
+
+// CompleteRaw sends a chat/completions request with the same retry/backoff as
+// Complete and returns the assistant text verbatim — no risk-block parsing, no
+// heuristic fallback. It exists for prompts whose response contract is not the
+// review risk block (e.g. changelog --ai's ```changelog payload): running
+// ParseRisk over such a response would log a spurious "risk block missing"
+// warning and compute a meaningless heuristic score. Deliberately a *Client
+// method rather than part of the Provider interface: the offline path never
+// reaches the network client (callers fall back to deterministic output before
+// selecting a provider at all).
+func (c *Client) CompleteRaw(ctx context.Context, req Request) (string, error) {
+	body, err := marshalChatRequest(req)
+	if err != nil {
+		return "", err
+	}
+	return c.doWithRetry(ctx, body)
 }
 
 // doWithRetry performs the HTTP request with exponential backoff + jitter,

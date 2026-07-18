@@ -8,3 +8,12 @@ import _ "embed"
 //
 //go:embed templates/review_system.tmpl
 var defaultReviewSystem string
+
+// defaultChangelogSystem is the embedded default system prompt for
+// `changelog --ai`. It instructs the model to rewrite the deterministic
+// grouping as release-note prose and to end with a fenced ```changelog JSON
+// block (parsed back in internal/llm — the changelog analogue of the review
+// risk-block contract).
+//
+//go:embed templates/changelog_system.tmpl
+var defaultChangelogSystem string

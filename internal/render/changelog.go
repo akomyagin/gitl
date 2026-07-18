@@ -137,10 +137,16 @@ func changelogMarkdownBody(art ChangelogArtifact) string {
 	return b.String()
 }
 
-// hasAnyEntries reports whether the changelog has at least one category
-// entry (Breaking entries are always duplicated into a category, so checking
-// Categories alone is sufficient).
+// hasAnyEntries reports whether the changelog has anything to print: at
+// least one category entry OR one breaking entry. The deterministic
+// categorizer always duplicates breaking commits into a category, but the
+// --ai path builds Breaking from the model payload independently of
+// Categories — a breaking-only artifact with empty categories is a valid
+// input here and must not render as "No changes".
 func hasAnyEntries(art ChangelogArtifact) bool {
+	if len(art.Breaking) > 0 {
+		return true
+	}
 	for _, entries := range art.Categories {
 		if len(entries) > 0 {
 			return true

@@ -120,3 +120,87 @@ func shortHash(h string) string {
 	}
 	return h
 }
+
+// Changelog is the input for building a `changelog --ai` prompt: the raw
+// commit list plus the deterministic categorization, which the model receives
+// as a starting point (it rewrites prose and may reclassify significant
+// non-conventional commits out of Other).
+type Changelog struct {
+	Range   string
+	Commits []gitlog.Commit
+	Grouped gitlog.Changelog
+}
+
+// BuildChangelog renders the system and user messages for an AI changelog
+// using the embedded default system prompt (equivalent to
+// BuildChangelogWithTemplate(c, "")).
+func BuildChangelog(c Changelog) (system, user string) {
+	return defaultChangelogSystem, buildChangelogUserMessage(c)
+}
+
+// BuildChangelogWithTemplate renders the system prompt from a custom template
+// file, mirroring BuildReviewWithTemplate. If systemTemplateFile is empty the
+// embedded default is used. Otherwise the file is parsed as a text/template
+// and executed with the Changelog as data (fields Range, Commits, Grouped).
+// The user message is built identically in both cases.
+func BuildChangelogWithTemplate(c Changelog, systemTemplateFile string) (system, user string, err error) {
+	user = buildChangelogUserMessage(c)
+	if systemTemplateFile == "" {
+		return defaultChangelogSystem, user, nil
+	}
+	tmpl, err := template.New(filepath.Base(systemTemplateFile)).Funcs(render.TemplateFuncs()).ParseFiles(systemTemplateFile)
+	if err != nil {
+		return "", "", fmt.Errorf("parse system template %q: %w", systemTemplateFile, err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, c); err != nil {
+		return "", "", fmt.Errorf("execute system template %q: %w", systemTemplateFile, err)
+	}
+	if buf.Len() == 0 {
+		return "", "", fmt.Errorf("system template %q produced empty output — ensure the template has content outside {{define}} blocks", systemTemplateFile)
+	}
+	return buf.String(), user, nil
+}
+
+// buildChangelogUserMessage assembles the changelog user message: the range,
+// the full commit list (short hash + subject + quoted body), and the
+// deterministic grouping the model starts from.
+func buildChangelogUserMessage(c Changelog) string {
+	var b strings.Builder
+
+	fmt.Fprintf(&b, "Rewrite the changelog for the git range `%s` (%d commit(s)).\n\n", c.Range, len(c.Commits))
+
+	b.WriteString("# Commits\n\n")
+	if len(c.Commits) == 0 {
+		b.WriteString("(no commits in range)\n")
+	}
+	for _, cm := range c.Commits {
+		fmt.Fprintf(&b, "- %s %s\n", shortHash(cm.Hash), cm.Subject)
+		if body := strings.TrimSpace(cm.Body); body != "" {
+			for _, line := range strings.Split(body, "\n") {
+				b.WriteString("  > " + line + "\n")
+			}
+		}
+	}
+
+	b.WriteString("\n# Deterministic grouping (starting point)\n\n")
+	for _, name := range gitlog.CategoryOrder {
+		entries := c.Grouped.Categories[name]
+		if len(entries) == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "### %s\n", name)
+		for _, e := range entries {
+			fmt.Fprintf(&b, "- %s (%s)\n", e.Subject, e.Hash)
+		}
+		b.WriteString("\n")
+	}
+	if len(c.Grouped.Breaking) > 0 {
+		b.WriteString("### BREAKING CHANGES\n")
+		for _, e := range c.Grouped.Breaking {
+			fmt.Fprintf(&b, "- %s (%s)\n", e.BreakingText, e.Hash)
+		}
+	}
+
+	return b.String()
+}

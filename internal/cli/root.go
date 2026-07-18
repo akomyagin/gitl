@@ -32,7 +32,7 @@ func newRootCmd() *cobra.Command {
 	root := &cobra.Command{
 		Use:           "gitl",
 		Short:         "AI reviewer of git history (git-log-lens)",
-		Long:          "gitl AI-reviews a git commit range (`gitl review <range>`) with an LLM, producing a structured risk score (low|medium|high) and md/text/json output.\n\nWithout an API key it falls back to a deterministic offline review.\n\ngitl changelog groups a range into Keep a Changelog categories, and gitl digest\naggregates activity over a day window (optionally across multiple repos) — both are\nfully deterministic and never call an LLM.",
+		Long:          "gitl AI-reviews a git commit range (`gitl review <range>`) with an LLM, producing a structured risk score (low|medium|high) and md/text/json output.\n\nWithout an API key it falls back to a deterministic offline review.\n\ngitl changelog groups a range into Keep a Changelog categories — fully deterministic\nby default; --ai optionally rewrites it with the model. gitl digest aggregates\nactivity over a day window (optionally across multiple repos) and never calls an LLM.",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRun: func(_ *cobra.Command, _ []string) {

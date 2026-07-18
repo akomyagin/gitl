@@ -300,3 +300,59 @@ func TestClientCompleteContextCancellation(t *testing.T) {
 		t.Error("expected context deadline error, got nil")
 	}
 }
+
+// CompleteRaw returns the assistant text verbatim: no risk-block parsing, no
+// stripping, no heuristic fallback — the caller owns the response contract
+// (changelog --ai's ```changelog block).
+func TestClientCompleteRawReturnsContentVerbatim(t *testing.T) {
+	t.Parallel()
+
+	const content = "prose before\n```changelog\n{\"categories\": {}}\n```\n" +
+		"```risk\n{\"level\":\"low\",\"summary\":\"must NOT be stripped\"}\n```"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		respondOK(w, content)
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientConfig{Provider: ProviderOpenAI, BaseURL: srv.URL, APIKey: "k", Timeout: 5 * time.Second})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := client.CompleteRaw(context.Background(), Request{User: "hi", Model: "m"})
+	if err != nil {
+		t.Fatalf("CompleteRaw: %v", err)
+	}
+	if got != content {
+		t.Errorf("CompleteRaw altered the content:\ngot:  %q\nwant: %q", got, content)
+	}
+}
+
+// CompleteRaw shares Complete's retry/backoff path.
+func TestClientCompleteRawRetriesThenSucceeds(t *testing.T) {
+	t.Parallel()
+
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if atomic.AddInt32(&calls, 1) == 1 {
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		respondOK(w, "raw ok")
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientConfig{Provider: ProviderOpenAI, BaseURL: srv.URL, APIKey: "k", Timeout: 5 * time.Second, MaxRetries: 3})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	got, err := client.CompleteRaw(context.Background(), Request{User: "hi", Model: "m"})
+	if err != nil {
+		t.Fatalf("CompleteRaw after 429→200: %v", err)
+	}
+	if got != "raw ok" {
+		t.Errorf("content = %q", got)
+	}
+	if n := atomic.LoadInt32(&calls); n != 2 {
+		t.Errorf("expected 2 calls (429 then 200), got %d", n)
+	}
+}

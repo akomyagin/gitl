@@ -12,6 +12,8 @@
   закоммиченных) изменений перед `git commit`.
 - **`gitl changelog [<range>]`** — changelog в стиле Keep a Changelog, группировка
   по conventional-commits (по умолчанию — диапазон от последнего тега до `HEAD`);
+  детерминированный по умолчанию, `--ai` опционально переписывает его моделью
+  в читаемую прозу release notes;
 - **`gitl digest [--days=N] [--repos=a,b,c]`** — сводка активности по авторам/темам/
   файлам, в т.ч. по **нескольким репозиториям параллельно**; интерактивный TUI (`--tui`).
 
@@ -62,9 +64,16 @@ go run ./cmd/gitl review HEAD~5..HEAD --no-cache
 # отключить стриминг (буферизованный вывод)
 go run ./cmd/gitl review HEAD~5..HEAD --no-stream
 
-# changelog с последнего тега (или вся история, если тегов нет) — без LLM
+# changelog с последнего тега (или вся история, если тегов нет) — без LLM по умолчанию
 go run ./cmd/gitl changelog
 go run ./cmd/gitl changelog v1.2.0..HEAD --format=json
+
+# AI-changelog: модель переписывает сгруппированный результат в прозу release notes
+# и переносит значимые non-conventional коммиты из "Other" в подходящие категории.
+# Без API-ключа (или при некорректном ответе модели) — откат к детерминированному
+# changelog с предупреждением, команда никогда не падает. --dry-run/--max-cost-usd/
+# --no-cache работают так же, как у review.
+GITL_API_KEY=sk-... go run ./cmd/gitl changelog --ai
 
 # сводка активности за последние N дней — без LLM
 go run ./cmd/gitl digest --days=14

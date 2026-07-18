@@ -98,6 +98,40 @@ func TestChangelogGoldenEmpty(t *testing.T) {
 	assertGolden(t, "testdata/changelog/empty.md", []byte(b.String()))
 }
 
+// TestChangelogBreakingOnlyNotEmpty is the regression test for the AI-path
+// scenario where the model returns a breaking change ONLY in `breaking`,
+// without duplicating it into any category: Categories is empty, Breaking is
+// not. The renderer must show the BREAKING CHANGES section, not "No changes".
+// (The deterministic path always duplicates breaking commits into a category,
+// so this artifact shape can only come from aiChangelogArtifact.)
+func TestChangelogBreakingOnlyNotEmpty(t *testing.T) {
+	t.Parallel()
+	art := ChangelogArtifact{
+		GeneratedAt: changelogGeneratedAt,
+		Range:       "v1.0.0..HEAD",
+		Categories:  map[string][]ChangelogEntry{},
+		Breaking: []ChangelogEntry{
+			{Hash: "abc1234", Subject: "Removed the legacy --foo flag", Breaking: true},
+		},
+		MissingRequiredCategories: []string{},
+	}
+
+	var b strings.Builder
+	if err := RenderChangelog(&b, art, FormatMarkdown); err != nil {
+		t.Fatalf("RenderChangelog: %v", err)
+	}
+	out := b.String()
+	if strings.Contains(out, "No changes in this range.") {
+		t.Errorf("breaking-only artifact rendered as empty:\n%s", out)
+	}
+	if !strings.Contains(out, "BREAKING CHANGES") {
+		t.Errorf("BREAKING CHANGES section missing:\n%s", out)
+	}
+	if !strings.Contains(out, "Removed the legacy --foo flag") || !strings.Contains(out, "abc1234") {
+		t.Errorf("breaking entry missing from output:\n%s", out)
+	}
+}
+
 func TestChangelogUnknownFormat(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
