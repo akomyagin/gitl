@@ -190,14 +190,14 @@ func dateOnly(t time.Time) string {
 }
 
 func renderDigestMarkdown(w io.Writer, art DigestArtifact) error {
-	if _, err := io.WriteString(w, digestMarkdownBody(art)); err != nil {
+	if _, err := io.WriteString(w, sanitizeTerminal(digestMarkdownBody(art))); err != nil {
 		return fmt.Errorf("render digest markdown: %w", err)
 	}
 	return nil
 }
 
 func renderDigestText(w io.Writer, art DigestArtifact) error {
-	if _, err := io.WriteString(w, stripMarkdown(digestMarkdownBody(art))); err != nil {
+	if _, err := io.WriteString(w, sanitizeTerminal(stripMarkdown(digestMarkdownBody(art)))); err != nil {
 		return fmt.Errorf("render digest text: %w", err)
 	}
 	return nil

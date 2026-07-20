@@ -140,6 +140,61 @@ func TestChangelogUnknownFormat(t *testing.T) {
 	}
 }
 
+// escapeInjectionChangelogArtifact plants ANSI escapes in attacker-controlled
+// changelog subjects.
+func escapeInjectionChangelogArtifact() ChangelogArtifact {
+	return ChangelogArtifact{
+		GeneratedAt: changelogGeneratedAt,
+		Range:       "v1.0.0..HEAD",
+		Categories: map[string][]ChangelogEntry{
+			"Added": {{Hash: "abc1234", Subject: "feat: normal\x1b[8mHIDDEN\x1b[0m"}},
+		},
+		Breaking:                  []ChangelogEntry{},
+		MissingRequiredCategories: []string{},
+	}
+}
+
+func TestChangelogMarkdownStripsEscapeSequences(t *testing.T) {
+	var b strings.Builder
+	if err := RenderChangelog(&b, escapeInjectionChangelogArtifact(), FormatMarkdown); err != nil {
+		t.Fatalf("RenderChangelog: %v", err)
+	}
+	got := b.String()
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("changelog markdown contains raw ESC byte:\n%q", got)
+	}
+	if !strings.Contains(got, "HIDDEN") {
+		t.Errorf("changelog markdown lost visible content:\n%q", got)
+	}
+}
+
+func TestChangelogTextStripsEscapeSequences(t *testing.T) {
+	var b strings.Builder
+	if err := RenderChangelog(&b, escapeInjectionChangelogArtifact(), FormatText); err != nil {
+		t.Fatalf("RenderChangelog: %v", err)
+	}
+	if strings.ContainsRune(b.String(), 0x1b) {
+		t.Errorf("changelog text contains raw ESC byte:\n%q", b.String())
+	}
+}
+
+func TestChangelogJSONKeepsEscapedControlBytes(t *testing.T) {
+	// JSON is deliberately NOT sanitized — encoding/json escapes control
+	// bytes (ESC becomes the six characters backslash-u001b) for the
+	// machine-facing sink.
+	var b strings.Builder
+	if err := RenderChangelog(&b, escapeInjectionChangelogArtifact(), FormatJSON); err != nil {
+		t.Fatalf("RenderChangelog: %v", err)
+	}
+	got := b.String()
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("changelog JSON contains raw ESC byte:\n%q", got)
+	}
+	if !strings.Contains(got, "\\u001b") {
+		t.Errorf("changelog JSON should contain the \\u001b escape sequence:\n%q", got)
+	}
+}
+
 func TestChangelogMissingRequiredCategoriesInJSON(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder

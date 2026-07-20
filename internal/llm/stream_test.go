@@ -126,6 +126,70 @@ func TestStreamNon200BeforeFirstByte(t *testing.T) {
 	}
 }
 
+// TestStreamSanitizesTerminalOutput verifies that ANSI escape sequences in
+// model output never reach the terminal-facing writer, even when the escape
+// sequence is deliberately split across two SSE data chunks (chunk A ends
+// with ESC+"[", chunk B starts with "31mHIDDEN"), while the internal raw
+// buffer used for ParseRisk still sees the unfiltered text.
+func TestStreamSanitizesTerminalOutput(t *testing.T) {
+	t.Parallel()
+
+	payload := "data: {\"choices\":[{\"delta\":{\"content\":\"safe \\u001b[\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"31mHIDDEN\\u001b[0m done\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"\\n```risk\\n{\\\"level\\\":\\\"low\\\",\\\"summary\\\":\\\"safe\\\"}\\n```\"}}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := sseServer(t, payload)
+	defer srv.Close()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	resp, err := c.Stream(context.Background(), Request{User: "hi", Model: "gpt-4o-mini"}, &w)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	if bytes.ContainsRune(w.Bytes(), 0x1b) {
+		t.Errorf("terminal-facing writer received raw ESC byte: %q", w.String())
+	}
+	if !strings.Contains(w.String(), "safe [31mHIDDEN[0m done") {
+		t.Errorf("streamed output lost visible content: %q", w.String())
+	}
+
+	// The internal buffer (what ParseRisk consumed) must keep the RAW,
+	// unfiltered text: resp.Content is that buffer with the risk block
+	// stripped, so the ESC bytes are still present there.
+	if !strings.Contains(resp.Content, "safe \x1b[31mHIDDEN\x1b[0m done") {
+		t.Errorf("resp.Content should carry the raw unfiltered text: %q", resp.Content)
+	}
+	if resp.Risk.Level != RiskLow {
+		t.Errorf("resp.Risk.Level = %q, want %q (risk block should still parse)", resp.Risk.Level, RiskLow)
+	}
+}
+
+// TestStreamSanitizerPreservesMultibyteUTF8 verifies that valid multi-byte
+// UTF-8 (Cyrillic, emoji) passes through the sanitizing writer unchanged when
+// not split by a chunk boundary.
+func TestStreamSanitizerPreservesMultibyteUTF8(t *testing.T) {
+	t.Parallel()
+
+	payload := "data: {\"choices\":[{\"delta\":{\"content\":\"фикс: добавил ✅ проверку\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"\\n```risk\\n{\\\"level\\\":\\\"low\\\",\\\"summary\\\":\\\"safe\\\"}\\n```\"}}]}\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := sseServer(t, payload)
+	defer srv.Close()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	if _, err := c.Stream(context.Background(), Request{User: "hi", Model: "gpt-4o-mini"}, &w); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if !strings.Contains(w.String(), "фикс: добавил ✅ проверку") {
+		t.Errorf("multibyte UTF-8 content corrupted by sanitizer: %q", w.String())
+	}
+}
+
 // TestStreamerInterfaceAssertion documents that the compile-time assertion in
 // stream.go (var _ Streamer = (*Client)(nil)) holds — Client implements Streamer.
 func TestStreamerInterfaceAssertion(t *testing.T) {

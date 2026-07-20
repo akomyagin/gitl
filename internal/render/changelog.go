@@ -156,14 +156,14 @@ func hasAnyEntries(art ChangelogArtifact) bool {
 }
 
 func renderChangelogMarkdown(w io.Writer, art ChangelogArtifact) error {
-	if _, err := io.WriteString(w, changelogMarkdownBody(art)); err != nil {
+	if _, err := io.WriteString(w, sanitizeTerminal(changelogMarkdownBody(art))); err != nil {
 		return fmt.Errorf("render changelog markdown: %w", err)
 	}
 	return nil
 }
 
 func renderChangelogText(w io.Writer, art ChangelogArtifact) error {
-	if _, err := io.WriteString(w, stripMarkdown(changelogMarkdownBody(art))); err != nil {
+	if _, err := io.WriteString(w, sanitizeTerminal(stripMarkdown(changelogMarkdownBody(art)))); err != nil {
 		return fmt.Errorf("render changelog text: %w", err)
 	}
 	return nil

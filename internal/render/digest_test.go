@@ -67,6 +67,57 @@ func multiRepoDigestArtifact() DigestArtifact {
 	return art
 }
 
+// escapeInjectionDigestArtifact plants ANSI escapes in attacker-controlled
+// digest fields (author name, file path).
+func escapeInjectionDigestArtifact() DigestArtifact {
+	art := singleRepoDigestArtifact()
+	art.Repos[0].ByAuthor[0].Author = "Jane\x1b[8mHIDDEN\x1b[0mDoe"
+	art.Repos[0].TopFiles[0].Path = "evil\x1b]0;pwned\x07.go"
+	return art
+}
+
+func TestDigestMarkdownStripsEscapeSequences(t *testing.T) {
+	var b strings.Builder
+	if err := RenderDigest(&b, escapeInjectionDigestArtifact(), FormatMarkdown); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	got := b.String()
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x07) {
+		t.Errorf("digest markdown contains raw control bytes:\n%q", got)
+	}
+	if !strings.Contains(got, "HIDDEN") {
+		t.Errorf("digest markdown lost visible content:\n%q", got)
+	}
+}
+
+func TestDigestTextStripsEscapeSequences(t *testing.T) {
+	var b strings.Builder
+	if err := RenderDigest(&b, escapeInjectionDigestArtifact(), FormatText); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	got := b.String()
+	if strings.ContainsRune(got, 0x1b) || strings.ContainsRune(got, 0x07) {
+		t.Errorf("digest text contains raw control bytes:\n%q", got)
+	}
+}
+
+func TestDigestJSONKeepsEscapedControlBytes(t *testing.T) {
+	// JSON is deliberately NOT sanitized — encoding/json escapes control
+	// bytes (ESC becomes the six characters backslash-u001b) for the
+	// machine-facing sink.
+	var b strings.Builder
+	if err := RenderDigest(&b, escapeInjectionDigestArtifact(), FormatJSON); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	got := b.String()
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("digest JSON contains raw ESC byte:\n%q", got)
+	}
+	if !strings.Contains(got, "\\u001b") {
+		t.Errorf("digest JSON should contain the \\u001b escape sequence:\n%q", got)
+	}
+}
+
 func multiRepoWithErrorDigestArtifact() DigestArtifact {
 	art := multiRepoDigestArtifact()
 	// Insert a failing repo between the two successful ones (§10.5 example).
