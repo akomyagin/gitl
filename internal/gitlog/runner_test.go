@@ -118,6 +118,133 @@ func TestRunnerLogAgainstRealRepo(t *testing.T) {
 	}
 }
 
+// TestRunnerLogSeparatorInjection reproduces the real exploit end-to-end: a
+// commit whose message carries raw \x1e/\x1f bytes (git stores them verbatim
+// when the message comes from a file via `git commit -F`). Under the old
+// \x1f/\x1e pretty-format separators such a commit split into bogus records
+// (corrupting file attribution) or hard-failed ParseLog — a one-commit DoS.
+// With NUL separators the bytes are inert body text.
+//
+// There is deliberately no companion test for "a single NUL inside a commit
+// body": that object is physically impossible — git fsck's nulInCommit check
+// rejects it at creation time regardless of tooling (even raw
+// `git hash-object -w -t commit --stdin`), which is precisely why the
+// NUL-separator scheme is safe: a field-sep NUL cannot be forged.
+func TestRunnerLogSeparatorInjection(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := setupTestRepo(t)
+
+	// Commit a regular file with an attacker-controlled message containing the
+	// old field/record separator bytes, via -F (the -m path would also pass
+	// them through, but -F mirrors the original exploit exactly).
+	writeTestFile(t, dir, "victim.txt", "innocent content\n")
+	msg := "feat: attack subject\n\nbody-before\x1einjected-record\x1finjected-field\nmore body\n"
+	msgFile := filepath.Join(t.TempDir(), "msg")
+	if err := os.WriteFile(msgFile, []byte(msg), 0o644); err != nil {
+		t.Fatalf("write commit message file: %v", err)
+	}
+	runTestGit(t, dir, "add", "victim.txt")
+	runTestGit(t, dir, "commit", "-q", "-F", msgFile)
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	commits, err := runner.Log(context.Background(), "HEAD")
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	// setupTestRepo makes 3 commits; the hostile one must be exactly one more,
+	// not split into several bogus records.
+	if len(commits) != 4 {
+		t.Fatalf("expected 4 commits, got %d: %+v", len(commits), commits)
+	}
+
+	attack := commits[0] // newest first
+	if attack.Subject != "feat: attack subject" {
+		t.Errorf("attack commit subject = %q", attack.Subject)
+	}
+	if !strings.Contains(attack.Body, "body-before\x1einjected-record") ||
+		!strings.Contains(attack.Body, "injected-record\x1finjected-field") {
+		t.Errorf("attack commit body lost or split the raw separator bytes: %q", attack.Body)
+	}
+	if len(attack.Files) != 1 || attack.Files[0].Status != "A" || attack.Files[0].Path != "victim.txt" {
+		t.Errorf("attack commit files = %+v, want single A victim.txt attributed to it", attack.Files)
+	}
+	// The neighboring commit must keep its own attribution untouched.
+	if neighbor := commits[1]; neighbor.Subject != "refactor: rename a.txt" {
+		t.Errorf("commit[1] subject = %q, want the rename commit", neighbor.Subject)
+	}
+}
+
+// TestRunnerLogHandlesEmptyMessageCommit is the end-to-end regression test
+// for the empty-message bug: `git commit --allow-empty-message -m ""` yields
+// a commit whose %s AND %b are both empty. Under the previous 2-NUL-terminator
+// design that produced 4 adjacent NULs after the date; the \x00{2,} record
+// regex swallowed them as one boundary, dropped two fields and failed the
+// whole range with "expected 4 or 5 NUL-separated fields in record, got 3" —
+// one legitimate commit made the entire history unreadable. The flat 5*N+1
+// token scheme parses it like any other commit.
+func TestRunnerLogHandlesEmptyMessageCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := t.TempDir()
+	runTestGit(t, dir, "init", "-q", "-b", "main")
+
+	writeTestFile(t, dir, "a.txt", "content a\n")
+	runTestGit(t, dir, "add", "a.txt")
+	runTestGit(t, dir, "commit", "-q", "-m", "feat: commit one\n\nbody one")
+
+	writeTestFile(t, dir, "b.txt", "content b\n")
+	runTestGit(t, dir, "add", "b.txt")
+	runTestGit(t, dir, "commit", "-q", "--allow-empty-message", "-m", "")
+
+	writeTestFile(t, dir, "c.txt", "content c\n")
+	runTestGit(t, dir, "add", "c.txt")
+	runTestGit(t, dir, "commit", "-q", "-m", "feat: commit three")
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	commits, err := runner.Log(context.Background(), "HEAD")
+	if err != nil {
+		t.Fatalf("Log: %v", err)
+	}
+	if len(commits) != 3 {
+		t.Fatalf("expected 3 commits, got %d: %+v", len(commits), commits)
+	}
+
+	// Newest first.
+	if commits[0].Subject != "feat: commit three" {
+		t.Errorf("commit[0] subject = %q", commits[0].Subject)
+	}
+	if len(commits[0].Files) != 1 || commits[0].Files[0].Path != "c.txt" {
+		t.Errorf("commit[0] files = %+v, want single A c.txt", commits[0].Files)
+	}
+
+	empty := commits[1]
+	if empty.Subject != "" || empty.Body != "" {
+		t.Errorf("empty-message commit: subject = %q, body = %q, want both empty", empty.Subject, empty.Body)
+	}
+	if len(empty.Files) != 1 || empty.Files[0].Status != "A" || empty.Files[0].Path != "b.txt" {
+		t.Errorf("empty-message commit files = %+v, want single A b.txt", empty.Files)
+	}
+
+	first := commits[2]
+	if first.Subject != "feat: commit one" || first.Body != "body one" {
+		t.Errorf("commit[2] subject/body = %q / %q", first.Subject, first.Body)
+	}
+	if len(first.Files) != 1 || first.Files[0].Path != "a.txt" {
+		t.Errorf("commit[2] files = %+v, want single A a.txt", first.Files)
+	}
+}
+
 func TestRunnerDiffAndErrors(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed; skipping integration test")
