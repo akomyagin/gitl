@@ -94,6 +94,27 @@ func runReviewInDir(t *testing.T, dir string, env map[string]string, args ...str
 	return stdout.String(), err
 }
 
+// TestReviewRejectsFlagLikeRevisionInjection is the end-to-end proof that the
+// git argument-injection exploit is closed through the real CLI path. The PoC
+// `gitl review -- --output=<file>` passes the flag-like string as a positional
+// argument (cobra treats everything after `--` as positional), which reaches
+// git as a revision range. Without the `--end-of-options` fix git interpreted
+// it as its own --output flag, wrote the log there, and gitl silently reported
+// "no commits". With the fix the command errors and no file is written.
+func TestReviewRejectsFlagLikeRevisionInjection(t *testing.T) {
+	dir := setupRepo(t, false)
+	marker := filepath.Join(t.TempDir(), "pwned")
+
+	out, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""},
+		"--", "--output="+marker)
+	if err == nil {
+		t.Errorf("expected an error (not silent success) for injected revision; stdout:\n%s", out)
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Errorf("injected --output file was created at %q (stat err = %v); injection NOT blocked", marker, statErr)
+	}
+}
+
 func TestReviewOfflineFormats(t *testing.T) {
 	dir := setupRepo(t, false)
 	env := map[string]string{"GITL_API_KEY": ""}
