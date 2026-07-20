@@ -12,11 +12,33 @@ import (
 	"time"
 )
 
-// logFormat is the --pretty format with ASCII control separators:
-// %x1f (unit separator) between fields, %x1e (record separator) after each
-// commit. Control characters never appear in commit messages, so they are
-// safe delimiters even for multi-line bodies (never split on "\n").
-const logFormat = "--pretty=format:%H%x1f%an%x1f%aI%x1f%s%x1f%b%x1e"
+// logFormat is the --pretty format with NUL separators: a single NUL (%x00)
+// after EACH of the five fields — including the last one, %b.
+//
+// NUL is the ONLY byte git guarantees can never appear inside a commit
+// message: fsck's nulInCommit check rejects such an object at creation time,
+// verified empirically both at the porcelain level (`git commit-tree`) and at
+// the plumbing level (`git hash-object -w -t commit --stdin`). Other control
+// characters give no such guarantee — \x1e/\x1f pass verbatim through
+// `git commit -F` from an attacker-controlled message and used to corrupt
+// parsing here (record injection / one-commit DoS). This is the same
+// principle behind git's own -z modes.
+//
+// The format inserts EXACTLY 5 literal %x00 bytes per commit (after
+// hash/author/date/subject/body). Git guarantees this regardless of field
+// content — an empty %s or %b still emits its trailing NUL — so a flat
+// strings.Split on the single NUL byte always yields exactly 5*N+1 tokens
+// for N commits, with no dependence on whether any field is empty. (A
+// previous design used a 2-NUL record terminator and split records on a
+// regex run of 2+ NULs; an empty subject AND body then produced 4 adjacent
+// NULs that the run greedily swallowed, losing two fields and failing the
+// whole range on one --allow-empty-message commit.)
+//
+// --name-status deliberately stays in its default TAB/LF mode (no -z): its
+// block contains no NUL bytes, so it appears exclusively as part of the
+// "head" token of the following record (glued to the next commit's hash
+// with no separator), which splitHead takes apart.
+const logFormat = "--pretty=format:%H%x00%an%x00%aI%x00%s%x00%b%x00"
 
 // Source provides git history for a revision range. It exists so that the
 // os/exec-based Runner could later be swapped for a go-git implementation
