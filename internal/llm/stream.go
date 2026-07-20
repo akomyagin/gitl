@@ -139,7 +139,14 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 	sw := sanitizingWriter{w: w}
 
 	var buf strings.Builder
-	scanner := bufio.NewScanner(resp.Body)
+	// Cap the TOTAL bytes read from the streaming body at the same threshold
+	// the non-streaming path applies (maxResponseBytes): a misbehaving or
+	// malicious endpoint (e.g. a self-hosted base_url) could otherwise stream
+	// data: chunks forever and grow buf without bound. When the limit is hit
+	// the reader reports EOF and the loop ends normally — the same silent
+	// truncation pattern doHTTPRoundTrip already uses; ParseRisk falls back to
+	// the heuristic risk if the tail was cut off.
+	scanner := bufio.NewScanner(io.LimitReader(resp.Body, maxResponseBytes))
 	// SSE events can carry lines well beyond the default 64 KiB scanner limit;
 	// expand to 1 MiB per line.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)

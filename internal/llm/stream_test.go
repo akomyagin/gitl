@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // newStreamClient builds a Client pointed at srv for streaming tests.
@@ -187,6 +188,66 @@ func TestStreamSanitizerPreservesMultibyteUTF8(t *testing.T) {
 	}
 	if !strings.Contains(w.String(), "фикс: добавил ✅ проверку") {
 		t.Errorf("multibyte UTF-8 content corrupted by sanitizer: %q", w.String())
+	}
+}
+
+// TestStreamCapsTotalBytesRead is a regression test for unbounded memory
+// growth in Stream: the per-line scanner buffer caps a single SSE line at
+// 1 MiB, but nothing used to cap the TOTAL bytes accumulated across lines, so
+// a misbehaving endpoint (e.g. a self-hosted base_url) streaming data: chunks
+// forever would grow the internal buffer without bound. The body must be read
+// through io.LimitReader(resp.Body, maxResponseBytes) so the total is capped
+// at the same 8 MiB threshold the non-streaming path already enforces.
+func TestStreamCapsTotalBytesRead(t *testing.T) {
+	t.Parallel()
+
+	// ~10 MiB of delta content split into 512 KiB chunks (each SSE line stays
+	// well under the 1 MiB per-line scanner limit) — deliberately past
+	// maxResponseBytes (8 MiB).
+	const chunkContent = 512 * 1024
+	const chunks = 20 // 20 × 512 KiB = 10 MiB of content
+	piece := strings.Repeat("a", chunkContent)
+	var payload strings.Builder
+	payload.Grow(chunks * (chunkContent + 64))
+	for range chunks {
+		payload.WriteString(`data: {"choices":[{"delta":{"content":"`)
+		payload.WriteString(piece)
+		payload.WriteString("\"}}]}\n\n")
+	}
+	payload.WriteString("data: [DONE]\n\n")
+
+	srv := sseServer(t, payload.String())
+	defer srv.Close()
+
+	// Guard against the regression mode where the stream is consumed forever:
+	// the call must return well within this window.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	resp, err := c.Stream(ctx, Request{User: "hi", Model: "gpt-4o-mini"}, &w)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+
+	// Small slack on top of maxResponseBytes for line-level buffering; the
+	// key property is that the output is nowhere near the full payload size.
+	const limit = maxResponseBytes + 1<<20
+	if w.Len() > limit {
+		t.Errorf("terminal writer received %d bytes, want <= %d (total stream read must be capped)", w.Len(), limit)
+	}
+	if len(resp.Content) > limit {
+		t.Errorf("resp.Content is %d bytes, want <= %d (total stream read must be capped)", len(resp.Content), limit)
+	}
+	if total := chunks * chunkContent; w.Len() >= total {
+		t.Errorf("terminal writer received the full %d-byte payload; stream reading is unbounded", total)
+	}
+
+	// Truncation cuts the stream before any risk block; the existing
+	// heuristic fallback must still produce a valid response.
+	if !resp.Risk.Heuristic {
+		t.Error("resp.Risk.Heuristic = false, want true (truncated stream has no risk block)")
 	}
 }
 
