@@ -219,11 +219,12 @@ func prSource(ctx context.Context, runner *gitlog.Runner, resolver PRResolver, p
 	// gh resolves the PR against its own notion of the repository, which is
 	// NOT necessarily the remote named "origin" (fork workflows: origin = the
 	// fork, upstream = where the PR and its pull/N/head ref actually live).
-	// Match the PR's owner/repo against the local remotes; "origin" remains
-	// the fallback when nothing matches (single-remote case, GHE URLs, ...).
+	// Match the PR's host/owner/repo against the local remotes; "origin"
+	// remains the fallback when nothing matches (single-remote case,
+	// unparsed URLs, ...).
 	remote := "origin"
-	if owner, repo, ok := parseGitHubOwnerRepo(ref.URL); ok {
-		remote = resolveRemoteName(ctx, runner, owner, repo)
+	if host, owner, repo, ok := parseGitHubOwnerRepo(ref.URL); ok {
+		remote = resolveRemoteName(ctx, runner, host, owner, repo)
 	}
 
 	// Best-effort fetch: skip fetching objects already present locally. The

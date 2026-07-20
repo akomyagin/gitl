@@ -134,65 +134,71 @@ func TestClassifyGHError(t *testing.T) {
 	}
 }
 
-// TestParseGitHubOwnerRepo: pure PR-URL parsing — github.com URLs yield
-// owner/repo, anything else (GHE hosts, malformed) yields ok=false.
+// TestParseGitHubOwnerRepo: pure PR-URL parsing — https PR URLs (github.com
+// and GHE hosts alike) yield host/owner/repo, anything malformed yields
+// ok=false.
 func TestParseGitHubOwnerRepo(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name  string
 		url   string
+		host  string
 		owner string
 		repo  string
 		ok    bool
 	}{
-		{"valid github.com PR URL", "https://github.com/acme/widget/pull/42", "acme", "widget", true},
-		{"owner and repo with dots and dashes", "https://github.com/some-org/my.repo-x/pull/1", "some-org", "my.repo-x", true},
-		{"GitHub Enterprise host", "https://github.example.com/acme/widget/pull/42", "", "", false},
-		{"http not https", "http://github.com/acme/widget/pull/42", "", "", false},
-		{"missing pull segment", "https://github.com/acme/widget/issues/42", "", "", false},
-		{"trailing garbage", "https://github.com/acme/widget/pull/42/files", "", "", false},
-		{"empty string", "", "", "", false},
+		{"valid github.com PR URL", "https://github.com/acme/widget/pull/42", "github.com", "acme", "widget", true},
+		{"owner and repo with dots and dashes", "https://github.com/some-org/my.repo-x/pull/1", "github.com", "some-org", "my.repo-x", true},
+		{"GitHub Enterprise host — now supported", "https://github.example.com/acme/widget/pull/42", "github.example.com", "acme", "widget", true},
+		{"http not https", "http://github.com/acme/widget/pull/42", "", "", "", false},
+		{"missing pull segment", "https://github.com/acme/widget/issues/42", "", "", "", false},
+		{"trailing garbage", "https://github.com/acme/widget/pull/42/files", "", "", "", false},
+		{"empty string", "", "", "", "", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			owner, repo, ok := parseGitHubOwnerRepo(tc.url)
-			if owner != tc.owner || repo != tc.repo || ok != tc.ok {
-				t.Errorf("parseGitHubOwnerRepo(%q) = (%q, %q, %v), want (%q, %q, %v)",
-					tc.url, owner, repo, ok, tc.owner, tc.repo, tc.ok)
+			host, owner, repo, ok := parseGitHubOwnerRepo(tc.url)
+			if host != tc.host || owner != tc.owner || repo != tc.repo || ok != tc.ok {
+				t.Errorf("parseGitHubOwnerRepo(%q) = (%q, %q, %q, %v), want (%q, %q, %q, %v)",
+					tc.url, host, owner, repo, ok, tc.host, tc.owner, tc.repo, tc.ok)
 			}
 		})
 	}
 }
 
 // TestRemoteURLMatchesRepo: pure remote-URL matching — https and ssh forms,
-// optional .git suffix, case-insensitive owner/repo.
+// optional .git suffix, case-insensitive owner/repo, host-scoped comparison.
 func TestRemoteURLMatchesRepo(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name  string
 		url   string
+		host  string
 		owner string
 		repo  string
 		want  bool
 	}{
-		{"https with .git", "https://github.com/acme/widget.git", "acme", "widget", true},
-		{"https without .git", "https://github.com/acme/widget", "acme", "widget", true},
-		{"ssh scp-like with .git", "git@github.com:acme/widget.git", "acme", "widget", true},
-		{"ssh scp-like without .git", "git@github.com:acme/widget", "acme", "widget", true},
-		{"ssh:// scheme", "ssh://git@github.com/acme/widget.git", "acme", "widget", true},
-		{"case-insensitive owner/repo", "https://github.com/ACME/Widget.git", "acme", "widget", true},
-		{"different repo", "https://github.com/acme/other.git", "acme", "widget", false},
-		{"different owner (fork)", "https://github.com/someone/widget.git", "acme", "widget", false},
-		{"non-github host", "https://gitlab.com/acme/widget.git", "acme", "widget", false},
-		{"empty URL", "", "acme", "widget", false},
+		{"https with .git", "https://github.com/acme/widget.git", "github.com", "acme", "widget", true},
+		{"https without .git", "https://github.com/acme/widget", "github.com", "acme", "widget", true},
+		{"ssh scp-like with .git", "git@github.com:acme/widget.git", "github.com", "acme", "widget", true},
+		{"ssh scp-like without .git", "git@github.com:acme/widget", "github.com", "acme", "widget", true},
+		{"ssh:// scheme", "ssh://git@github.com/acme/widget.git", "github.com", "acme", "widget", true},
+		{"case-insensitive owner/repo", "https://github.com/ACME/Widget.git", "github.com", "acme", "widget", true},
+		{"different repo", "https://github.com/acme/other.git", "github.com", "acme", "widget", false},
+		{"different owner (fork)", "https://github.com/someone/widget.git", "github.com", "acme", "widget", false},
+		{"non-github host", "https://gitlab.com/acme/widget.git", "github.com", "acme", "widget", false},
+		{"GHE https remote against GHE host", "https://github.example.com/acme/widget.git", "github.example.com", "acme", "widget", true},
+		{"GHE ssh remote against GHE host", "git@github.example.com:acme/widget.git", "github.example.com", "acme", "widget", true},
+		{"GHE remote against github.com host", "https://github.example.com/acme/widget.git", "github.com", "acme", "widget", false},
+		{"empty URL", "", "github.com", "acme", "widget", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := remoteURLMatchesRepo(tc.url, tc.owner, tc.repo); got != tc.want {
-				t.Errorf("remoteURLMatchesRepo(%q, %q, %q) = %v, want %v",
-					tc.url, tc.owner, tc.repo, got, tc.want)
+			if got := remoteURLMatchesRepo(tc.url, tc.host, tc.owner, tc.repo); got != tc.want {
+				t.Errorf("remoteURLMatchesRepo(%q, %q, %q, %q) = %v, want %v",
+					tc.url, tc.host, tc.owner, tc.repo, got, tc.want)
 			}
 		})
 	}
@@ -216,17 +222,48 @@ func TestResolveRemoteName(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if got := resolveRemoteName(ctx, runner, "acme", "widget"); got != "upstream" {
+	if got := resolveRemoteName(ctx, runner, "github.com", "acme", "widget"); got != "upstream" {
 		t.Errorf("resolveRemoteName(acme/widget) = %q, want %q", got, "upstream")
 	}
-	if got := resolveRemoteName(ctx, runner, "someone", "widget"); got != "origin" {
+	if got := resolveRemoteName(ctx, runner, "github.com", "someone", "widget"); got != "origin" {
 		t.Errorf("resolveRemoteName(someone/widget) = %q, want %q (fork remote)", got, "origin")
 	}
-	if got := resolveRemoteName(ctx, runner, "nobody", "nothing"); got != "origin" {
+	if got := resolveRemoteName(ctx, runner, "github.com", "nobody", "nothing"); got != "origin" {
 		t.Errorf("resolveRemoteName(no match) = %q, want fallback %q", got, "origin")
 	}
-	if got := resolveRemoteName(ctx, runner, "", ""); got != "origin" {
-		t.Errorf("resolveRemoteName(empty owner/repo) = %q, want fallback %q", got, "origin")
+	if got := resolveRemoteName(ctx, runner, "", "", ""); got != "origin" {
+		t.Errorf("resolveRemoteName(empty host/owner/repo) = %q, want fallback %q", got, "origin")
+	}
+}
+
+// TestResolveRemoteNameGHE: end-to-end host-scoped matching on a real temp
+// repo with GitHub Enterprise remotes (origin = fork on the GHE host,
+// upstream = the PR's repository on the same GHE host) — the gh-reported GHE
+// host must select the matching remote, while a github.com query against the
+// same remotes must fall back to "origin".
+func TestResolveRemoteNameGHE(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := t.TempDir()
+	runGit(t, dir, "init", "-q", "-b", "main")
+	runGit(t, dir, "remote", "add", "origin", "git@github.example.com:someone/widget.git")
+	runGit(t, dir, "remote", "add", "upstream", "https://github.example.com/acme/widget.git")
+
+	runner, err := gitlog.NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	ctx := context.Background()
+
+	if got := resolveRemoteName(ctx, runner, "github.example.com", "acme", "widget"); got != "upstream" {
+		t.Errorf("resolveRemoteName(GHE acme/widget) = %q, want %q", got, "upstream")
+	}
+	if got := resolveRemoteName(ctx, runner, "github.example.com", "someone", "widget"); got != "origin" {
+		t.Errorf("resolveRemoteName(GHE someone/widget) = %q, want %q (fork remote)", got, "origin")
+	}
+	if got := resolveRemoteName(ctx, runner, "github.com", "acme", "widget"); got != "origin" {
+		t.Errorf("resolveRemoteName(github.com against GHE remotes) = %q, want fallback %q", got, "origin")
 	}
 }
 
@@ -243,7 +280,7 @@ func TestResolveRemoteNameNoRemotes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewRunner: %v", err)
 	}
-	if got := resolveRemoteName(context.Background(), runner, "acme", "widget"); got != "origin" {
+	if got := resolveRemoteName(context.Background(), runner, "github.com", "acme", "widget"); got != "origin" {
 		t.Errorf("resolveRemoteName(no remotes) = %q, want fallback %q", got, "origin")
 	}
 }

@@ -130,54 +130,64 @@ func classifyGHError(num int, stderr string, err error) error {
 	}
 }
 
-// ghPRURLPattern matches a github.com pull request URL as reported by
-// `gh pr view --json url`, e.g. https://github.com/OWNER/REPO/pull/42.
-// GitHub Enterprise URLs (other hosts) deliberately do NOT match — the caller
-// falls back to the "origin" remote rather than guessing.
-var ghPRURLPattern = regexp.MustCompile(`^https://github\.com/([^/]+)/([^/]+)/pull/\d+$`)
+// ghPRURLPattern matches a pull request URL as reported by `gh pr view
+// --json url`, e.g. https://github.com/OWNER/REPO/pull/42 or, for GitHub
+// Enterprise, https://ghe.example.com/OWNER/REPO/pull/42 — the host is
+// captured, not assumed, so GHE works the same way github.com does: gh
+// itself never fabricates a host, so this comparison stays strict.
+var ghPRURLPattern = regexp.MustCompile(`^https://([^/]+)/([^/]+)/([^/]+)/pull/\d+$`)
 
-// parseGitHubOwnerRepo extracts owner/repo from a github.com PR URL. ok=false
-// for anything unrecognized (empty, GHE host, malformed) — not an error, the
-// caller just keeps the historical "origin" default. Pure function.
-func parseGitHubOwnerRepo(url string) (owner, repo string, ok bool) {
+// parseGitHubOwnerRepo extracts host/owner/repo from a PR URL reported by gh.
+// ok=false for anything unrecognized (empty, malformed, non-https) — not an
+// error, the caller just keeps the historical "origin" default. Pure function.
+func parseGitHubOwnerRepo(url string) (host, owner, repo string, ok bool) {
 	m := ghPRURLPattern.FindStringSubmatch(url)
 	if m == nil {
-		return "", "", false
+		return "", "", "", false
 	}
-	return m[1], m[2], true
+	return m[1], m[2], m[3], true
 }
 
-// Remote URL forms that identify a github.com repository: https (with or
-// without a trailing .git) and ssh scp-like syntax. Owner/repo comparison is
+// Remote URL forms that identify a hosted git repository: https (with or
+// without a trailing .git) and ssh scp-like syntax. The host is captured
+// (not assumed to be github.com), so GitHub Enterprise remotes match the
+// same way — remoteURLMatchesRepo requires the host to equal the one gh
+// reported for the PR, so this stays a strict, host-scoped comparison, not
+// an open-ended "any git host" match. Owner/repo comparison is
 // case-insensitive, matching GitHub's own semantics.
 var (
-	ghHTTPSRemotePattern = regexp.MustCompile(`(?i)^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$`)
-	ghSSHRemotePattern   = regexp.MustCompile(`(?i)^(?:ssh://)?git@github\.com[:/]([^/]+)/([^/]+?)(?:\.git)?$`)
+	httpsRemotePattern = regexp.MustCompile(`(?i)^https://([^/]+)/([^/]+)/([^/]+?)(?:\.git)?/?$`)
+	sshRemotePattern   = regexp.MustCompile(`(?i)^(?:ssh://)?git@([^:/]+)[:/]([^/]+)/([^/]+?)(?:\.git)?$`)
 )
 
-// remoteURLMatchesRepo reports whether a `git remote get-url` result points at
-// the given github.com owner/repo, accepting both https and ssh URL forms.
+// remoteURLMatchesRepo reports whether a `git remote get-url` result points
+// at the given host/owner/repo, accepting both https and ssh URL forms.
 // Pure function.
-func remoteURLMatchesRepo(remoteURL, owner, repo string) bool {
+func remoteURLMatchesRepo(remoteURL, host, owner, repo string) bool {
 	u := strings.TrimSpace(remoteURL)
-	for _, re := range []*regexp.Regexp{ghHTTPSRemotePattern, ghSSHRemotePattern} {
+	for _, re := range []*regexp.Regexp{httpsRemotePattern, sshRemotePattern} {
 		if m := re.FindStringSubmatch(u); m != nil {
-			return strings.EqualFold(m[1], owner) && strings.EqualFold(m[2], repo)
+			return strings.EqualFold(m[1], host) && strings.EqualFold(m[2], owner) && strings.EqualFold(m[3], repo)
 		}
 	}
 	return false
 }
 
 // resolveRemoteName finds the local remote whose URL points at the PR's
-// repository (owner/repo from the gh-reported PR URL). gh resolves PRs by its
-// own repo detection, which is NOT tied to a remote named "origin" — in fork
-// workflows "origin" is the fork and the PR lives on "upstream", where
-// pull/N/head is actually published. When nothing matches (no remotes, GHE,
+// repository (host/owner/repo from the gh-reported PR URL). gh resolves PRs
+// by its own repo detection, which is NOT tied to a remote named "origin" —
+// in fork workflows "origin" is the fork and the PR lives on "upstream",
+// where pull/N/head is actually published. When nothing matches (no remotes,
 // unparsed URL), it falls back to "origin", preserving the old behavior for
-// the common single-remote case.
-func resolveRemoteName(ctx context.Context, runner *gitlog.Runner, owner, repo string) string {
+// the common single-remote case. Arbitrary SSH host aliases from
+// ~/.ssh/config (e.g. `Host gh-work` → `HostName github.com`) are
+// deliberately NOT resolved: the remote URL is compared literally, without
+// consulting the SSH config — resolving aliases (parsing ~/.ssh/config,
+// shelling out to `ssh -G`) is a much larger task, intentionally out of
+// scope here.
+func resolveRemoteName(ctx context.Context, runner *gitlog.Runner, host, owner, repo string) string {
 	const fallback = "origin"
-	if owner == "" || repo == "" {
+	if host == "" || owner == "" || repo == "" {
 		return fallback
 	}
 	names, err := runner.RemoteNames(ctx)
@@ -189,7 +199,7 @@ func resolveRemoteName(ctx context.Context, runner *gitlog.Runner, owner, repo s
 		if err != nil {
 			continue
 		}
-		if remoteURLMatchesRepo(url, owner, repo) {
+		if remoteURLMatchesRepo(url, host, owner, repo) {
 			return name
 		}
 	}
