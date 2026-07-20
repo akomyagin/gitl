@@ -35,6 +35,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.height = msg.Height - 2 // reserve 1 line for footer hint
+		if m.height < 0 {
+			m.height = 0 // tiny terminal: clamp so View never slices with a negative end
+		}
 		m.width = msg.Width
 		m.ready = true
 	case tea.KeyMsg:

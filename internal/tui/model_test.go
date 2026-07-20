@@ -2,6 +2,7 @@ package tui
 
 import (
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -76,6 +77,50 @@ func TestGoldenView(t *testing.T) {
 
 	if got != string(want) {
 		t.Errorf("view mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+// TestViewDoesNotPanicOnTinyTerminal is a regression test: with a terminal
+// height of <=2 the naive `msg.Height - 2` made m.height negative and View()
+// panicked with "slice bounds out of range". Any panic fails the subtest.
+func TestViewDoesNotPanicOnTinyTerminal(t *testing.T) {
+	for _, h := range []int{0, 1, 2, 3} {
+		t.Run(fmt.Sprintf("height=%d", h), func(t *testing.T) {
+			m := New(fixtureArtifact())
+			m2, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: h})
+			m = m2.(Model)
+
+			if got := m.View(); got == "" {
+				t.Error("View returned empty string; footer expected even on tiny terminal")
+			}
+			if m.height < 0 {
+				t.Errorf("m.height = %d, want >= 0", m.height)
+			}
+
+			// Navigate at tiny size: down and pgdn must not drive offset out of
+			// range or make View panic.
+			for i := 0; i < 5; i++ {
+				m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+				m = m2.(Model)
+				m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+				m = m2.(Model)
+				_ = m.View()
+			}
+			if m.offset < 0 || m.offset > len(m.lines) {
+				t.Errorf("offset %d out of range [0, %d]", m.offset, len(m.lines))
+			}
+
+			// Resize from a normal size down to the tiny size mid-session
+			// (the realistic crash path) and render again.
+			m = New(fixtureArtifact())
+			m2, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: 24})
+			m = m2.(Model)
+			m2, _ = m.Update(tea.KeyMsg{Type: tea.KeyPgDown})
+			m = m2.(Model)
+			m2, _ = m.Update(tea.WindowSizeMsg{Width: 80, Height: h})
+			m = m2.(Model)
+			_ = m.View()
+		})
 	}
 }
 
