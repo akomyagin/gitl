@@ -139,11 +139,7 @@ func resolveDigestRepos(cmd *cobra.Command, cfg *config.Config) ([]string, error
 // (§10.5/§10.6).
 func buildDigestArtifact(generatedAt time.Time, days int, since time.Time, results []gitlog.RepoResult) render.DigestArtifact {
 	repos := make([]render.RepoDigest, 0, len(results))
-	until := generatedAt
 	for _, r := range results {
-		if !r.Until.IsZero() {
-			until = r.Until
-		}
 		if r.Err != nil {
 			repos = append(repos, render.RepoDigest{Path: r.Path, Ok: false, Err: r.Err.Error()})
 			continue
@@ -165,7 +161,7 @@ func buildDigestArtifact(generatedAt time.Time, days int, since time.Time, resul
 		GeneratedAt: generatedAt,
 		Days:        days,
 		Since:       since,
-		Until:       until,
+		Until:       generatedAt,
 		Repos:       repos,
 	}
 }
