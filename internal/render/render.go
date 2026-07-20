@@ -126,7 +126,7 @@ func RenderWithTemplate(w io.Writer, art Artifact, format Format, outputTemplate
 	if buf.Len() == 0 {
 		return fmt.Errorf("output template %q produced empty output — ensure the template has content outside {{define}} blocks", outputTemplateFile)
 	}
-	if _, err := io.Copy(w, &buf); err != nil {
+	if _, err := io.WriteString(w, sanitizeTerminal(buf.String())); err != nil {
 		return fmt.Errorf("write rendered output: %w", err)
 	}
 	return nil
@@ -153,18 +153,18 @@ func riskHeader(art Artifact) string {
 // fields. Used by the streaming path, which renders the header after [DONE]
 // rather than through the full Artifact renderer.
 func RiskHeaderLine(level, summary string, heuristic bool) string {
-	return riskHeader(Artifact{
+	return sanitizeTerminal(riskHeader(Artifact{
 		RiskLevel:     level,
 		RiskSummary:   summary,
 		RiskHeuristic: heuristic,
-	})
+	}))
 }
 
 // renderMarkdown prepends the risk header to the review body.
 func renderMarkdown(w io.Writer, art Artifact) error {
 	body := strings.TrimRight(art.ReviewMarkdown, "\n")
 	out := riskHeader(art) + "\n\n" + body + "\n"
-	if _, err := io.WriteString(w, out); err != nil {
+	if _, err := io.WriteString(w, sanitizeTerminal(out)); err != nil {
 		return fmt.Errorf("render markdown: %w", err)
 	}
 	return nil
@@ -175,7 +175,7 @@ func renderMarkdown(w io.Writer, art Artifact) error {
 func renderText(w io.Writer, art Artifact) error {
 	body := strings.TrimRight(art.ReviewMarkdown, "\n")
 	combined := riskHeader(art) + "\n\n" + body
-	if _, err := io.WriteString(w, stripMarkdown(combined)+"\n"); err != nil {
+	if _, err := io.WriteString(w, sanitizeTerminal(stripMarkdown(combined)+"\n")); err != nil {
 		return fmt.Errorf("render text: %w", err)
 	}
 	return nil

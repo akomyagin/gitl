@@ -234,6 +234,80 @@ func TestReviewMDTmplMatchesRenderMarkdown(t *testing.T) {
 	}
 }
 
+// escapeInjectionArtifact is sampleArtifact with attacker-controlled ANSI
+// escape sequences in every field that reaches the output.
+func escapeInjectionArtifact() Artifact {
+	art := sampleArtifact()
+	art.RiskSummary = "summary\x1b[8mHIDDEN\x1b[0m"
+	art.Commits[0].Subject = "feat: normal\x1b[8mHIDDEN\x1b[0m"
+	art.Commits[0].Author = "Jane\x1b]0;pwned\x07Doe"
+	art.ReviewMarkdown = "## Summary\n\nfeat: normal\x1b[8mHIDDEN\x1b[0m body\n"
+	return art
+}
+
+func TestRenderMarkdownStripsEscapeSequences(t *testing.T) {
+	var b strings.Builder
+	if err := Render(&b, escapeInjectionArtifact(), FormatMarkdown); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := b.String()
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("markdown output contains raw ESC byte:\n%q", got)
+	}
+	if !strings.Contains(got, "HIDDEN") {
+		t.Errorf("markdown output lost visible content:\n%q", got)
+	}
+}
+
+func TestRenderTextStripsEscapeSequences(t *testing.T) {
+	var b strings.Builder
+	if err := Render(&b, escapeInjectionArtifact(), FormatText); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if strings.ContainsRune(b.String(), 0x1b) {
+		t.Errorf("text output contains raw ESC byte:\n%q", b.String())
+	}
+}
+
+func TestRenderJSONKeepsEscapedControlBytes(t *testing.T) {
+	// JSON is deliberately NOT sanitized: encoding/json escapes control bytes
+	// (ESC becomes the six characters backslash-u001b), which is safe for a
+	// non-terminal sink and preserves the raw data for machine consumers.
+	var b strings.Builder
+	if err := Render(&b, escapeInjectionArtifact(), FormatJSON); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	got := b.String()
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("JSON output contains raw ESC byte:\n%q", got)
+	}
+	if !strings.Contains(got, "\\u001b") {
+		t.Errorf("JSON output should contain the \\u001b escape sequence for ESC:\n%q", got)
+	}
+}
+
+func TestRiskHeaderLineStripsEscapeSequences(t *testing.T) {
+	got := RiskHeaderLine("high", "bad\x1b[8mHIDDEN\x1b[0m", false)
+	if strings.ContainsRune(got, 0x1b) {
+		t.Errorf("RiskHeaderLine contains raw ESC byte: %q", got)
+	}
+}
+
+func TestRenderWithTemplateStripsEscapeSequences(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "out.tmpl")
+	if err := os.WriteFile(path, []byte("{{.ReviewMarkdown}}"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	var b strings.Builder
+	if err := RenderWithTemplate(&b, escapeInjectionArtifact(), FormatMarkdown, path); err != nil {
+		t.Fatalf("RenderWithTemplate: %v", err)
+	}
+	if strings.ContainsRune(b.String(), 0x1b) {
+		t.Errorf("templated output contains raw ESC byte:\n%q", b.String())
+	}
+}
+
 func TestRenderHeuristicAnnotation(t *testing.T) {
 	art := sampleArtifact()
 	art.RiskHeuristic = true

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 )
 
 // Streamer is an optional interface for providers that support token-by-token
@@ -38,6 +39,54 @@ type streamChunk struct {
 			Content string `json:"content"`
 		} `json:"delta"`
 	} `json:"choices"`
+}
+
+// sanitizingWriter strips terminal control characters from everything written
+// through it, defusing ANSI/terminal escape injection in streamed model output
+// (which may quote attacker-controlled commit messages verbatim). The policy
+// mirrors render's sanitizeTerminal — deliberately duplicated here, not
+// imported, to avoid a render↔llm cross-package dependency: valid runes in C0
+// (0x00–0x1F, except '\t' and '\n'), DEL (0x7F), and C1 (0x80–0x9F) are
+// removed (not replaced). Bytes that do not decode as valid UTF-8 (e.g. a
+// multi-byte rune split across an SSE chunk boundary) pass through untouched —
+// only validly-decoded control runes are dropped.
+type sanitizingWriter struct{ w io.Writer }
+
+func (s sanitizingWriter) Write(p []byte) (int, error) {
+	out := make([]byte, 0, len(p))
+	for i := 0; i < len(p); {
+		r, size := utf8.DecodeRune(p[i:])
+		if r == utf8.RuneError && size == 1 {
+			// Invalid/truncated byte (possibly a rune cut by a chunk boundary):
+			// keep it as-is rather than risk corrupting multi-byte content.
+			out = append(out, p[i])
+			i++
+			continue
+		}
+		if dropControlRune(r) {
+			i += size
+			continue
+		}
+		out = append(out, p[i:i+size]...)
+		i += size
+	}
+	if len(out) > 0 {
+		if _, err := s.w.Write(out); err != nil {
+			return 0, err
+		}
+	}
+	// The whole input is considered consumed even when bytes were filtered
+	// out, per the io.Writer contract (no spurious short-write errors).
+	return len(p), nil
+}
+
+// dropControlRune reports whether r is a terminal control rune to remove:
+// C0 minus '\t'/'\n', DEL, or C1.
+func dropControlRune(r rune) bool {
+	if r == '\t' || r == '\n' {
+		return false
+	}
+	return r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F)
 }
 
 // Stream sends a streaming chat/completions request and writes each token to w
@@ -83,6 +132,12 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 		return Response{}, classifyStatus(c.provider, resp.StatusCode, extractErrorMessage(msg))
 	}
 
+	// Terminal-facing writer: strip control characters as tokens arrive. buf
+	// below intentionally keeps the RAW text — ParseRisk needs the unfiltered
+	// stream, and the risk header is sanitized on output via
+	// render.RiskHeaderLine.
+	sw := sanitizingWriter{w: w}
+
 	var buf strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
 	// SSE events can carry lines well beyond the default 64 KiB scanner limit;
@@ -112,7 +167,7 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 		if delta == "" {
 			continue
 		}
-		if _, err := io.WriteString(w, delta); err != nil {
+		if _, err := io.WriteString(sw, delta); err != nil {
 			return Response{}, fmt.Errorf("llm: write stream output: %w", err)
 		}
 		buf.WriteString(delta)
