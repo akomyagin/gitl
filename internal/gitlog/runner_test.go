@@ -231,6 +231,90 @@ func TestRunnerFetchRef(t *testing.T) {
 	}
 }
 
+// TestRunnerLogRejectsFlagLikeRevision reproduces the git argument-injection
+// exploit: a revision that is actually a git flag (`--output=<file>`) must NOT
+// be interpreted as an option. Before the `--end-of-options` fix, git wrote its
+// log to the attacker-controlled path and gitl silently reported no commits.
+// With the fix git rejects the flag-like argument and no file is written.
+func TestRunnerLogRejectsFlagLikeRevision(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := setupTestRepo(t)
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	target := filepath.Join(t.TempDir(), "should-not-exist")
+	_, err = runner.Log(context.Background(), "--output="+target)
+	if err == nil {
+		t.Fatal("Log with flag-like revision: expected error, got nil (injection not blocked)")
+	}
+	if strings.TrimSpace(err.Error()) == "" {
+		t.Error("Log error text is empty; expected a real git failure message")
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Errorf("injected --output file was created at %q (stat err = %v); injection NOT blocked", target, statErr)
+	}
+}
+
+// TestRunnerDiffRejectsFlagLikeRevision is the same argument-injection check for
+// Diff: a `--output=<file>` "revision" must be rejected, not executed.
+func TestRunnerDiffRejectsFlagLikeRevision(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := setupTestRepo(t)
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	target := filepath.Join(t.TempDir(), "should-not-exist")
+	_, err = runner.Diff(context.Background(), "--output="+target)
+	if err == nil {
+		t.Fatal("Diff with flag-like revision: expected error, got nil (injection not blocked)")
+	}
+	if strings.TrimSpace(err.Error()) == "" {
+		t.Error("Diff error text is empty; expected a real git failure message")
+	}
+	if _, statErr := os.Stat(target); !os.IsNotExist(statErr) {
+		t.Errorf("injected --output file was created at %q (stat err = %v); injection NOT blocked", target, statErr)
+	}
+}
+
+// TestRunnerFetchRejectsFlagLikeRef checks defense-in-depth on FetchRef: a ref
+// that is actually an option (`--upload-pack=...`) must be rejected by git as an
+// invalid refspec rather than executed. The marker file the payload would create
+// must not appear.
+func TestRunnerFetchRejectsFlagLikeRef(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	origin := setupTestRepo(t)
+
+	work := t.TempDir()
+	runTestGit(t, work, "clone", "-q", origin, "clone")
+	cloneDir := filepath.Join(work, "clone")
+
+	runner, err := NewRunner(cloneDir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+
+	marker := filepath.Join(t.TempDir(), "pwned")
+	err = runner.FetchRef(context.Background(), "origin", "--upload-pack=touch "+marker)
+	if err == nil {
+		t.Error("FetchRef with flag-like ref: expected error, got nil (injection not blocked)")
+	}
+	if _, statErr := os.Stat(marker); !os.IsNotExist(statErr) {
+		t.Errorf("injected --upload-pack payload ran: marker %q exists (stat err = %v)", marker, statErr)
+	}
+}
+
 func TestRunnerDiffStaged(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not installed; skipping integration test")

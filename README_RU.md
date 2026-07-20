@@ -56,8 +56,9 @@ go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # ненулевой exit
 # оценка стоимости без реального вызова API
 go run ./cmd/gitl review HEAD~5..HEAD --dry-run
 
-# кастомный системный шаблон (например, политика ревью вашей команды)
-go run ./cmd/gitl review HEAD~5..HEAD --system-template=./review-policy.md
+# кастомный системный промпт задаётся только через конфиг
+# (prompt.system_template_file), CLI-флага --system-template нет —
+# см. Конфигурация → Кастомные шаблоны ниже
 
 # пропустить дисковый кэш LLM-ответов (всегда вызывать модель)
 go run ./cmd/gitl review HEAD~5..HEAD --no-cache
@@ -174,6 +175,11 @@ llm:
 по мере поступления — не нужно ждать полного ответа. Стриминг включён по умолчанию
 и автоматически отключается в CI (не-TTY stdout) или с `--format=json`.
 
+Стриминг сейчас реализован **только для OpenAI-совместимого провайдера**
+(`openai` / `ollama` / `azure_openai`). С нативным `anthropic` или `gemini`
+провайдером `gitl` прозрачно отдаёт то же ревью одним буферизованным ответом
+(без токен-за-токеном), независимо от `output.stream` / `--no-stream`.
+
 ```yaml
 output:
   stream: true   # по умолчанию; false — всегда буферизовать
@@ -195,20 +201,31 @@ cache:
 Кэш хранится в `~/.cache/gitl/review/` (XDG-совместимо). Пропустить для одного вызова:
 `gitl review HEAD~5..HEAD --no-cache`
 
-### Кастомные шаблоны (`output.system_template`)
+### Кастомные шаблоны (`prompt.system_template_file` / `output.template_file`)
 
-Подайте собственный системный промпт — чеклист безопасности, архитектурные ограничения,
-правила команды:
+Два независимых override'а, оба только через конфиг (CLI-флага для них нет):
 
-```yaml
-output:
-  system_template: "./review-policy.md"   # путь относительно CWD
-```
+- **`prompt.system_template_file`** — собственный **системный промпт ревью**
+  (чеклист безопасности, архитектурные ограничения, правила команды):
 
-Переопределить для одного вызова: `gitl review HEAD~5..HEAD --system-template=./my-policy.md`
+  ```yaml
+  prompt:
+    system_template_file: "./review-policy.md"   # путь относительно CWD
+  ```
 
-Шаблон получает `{{ .Commits }}`, `{{ .Diff }}`, `{{ .RepoName }}` и полный набор
-функций, задокументированных в `internal/prompt/templates.go`.
+  Шаблон системного промпта получает `{{ .Commits }}`, `{{ .Diff }}`,
+  `{{ .Range }}`, `{{ .Staged }}` (см. `internal/prompt/templates.go`).
+
+- **`output.template_file`** — собственный **шаблон рендера `md`-формата** для
+  готового артефакта ревью:
+
+  ```yaml
+  output:
+    template_file: "./review-output.tmpl"   # путь относительно CWD
+  ```
+
+  Шаблон вывода получает render-функции из `internal/render/render.go`
+  (`render.TemplateFuncs()`).
 
 ## GitHub Action
 

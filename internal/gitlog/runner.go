@@ -80,7 +80,7 @@ func NewRunner(dir string) (*Runner, error) {
 // Log runs `git log` over revRange with the control-separator format plus
 // --name-status and parses the output into Commits.
 func (r *Runner) Log(ctx context.Context, revRange string) ([]Commit, error) {
-	out, err := r.run(ctx, "log", logFormat, "--name-status", revRange)
+	out, err := r.run(ctx, "log", logFormat, "--name-status", "--end-of-options", revRange)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,7 @@ func (r *Runner) Log(ctx context.Context, revRange string) ([]Commit, error) {
 
 // Diff runs `git diff` over revRange and returns the raw unified diff text.
 func (r *Runner) Diff(ctx context.Context, revRange string) (string, error) {
-	return r.run(ctx, "diff", revRange)
+	return r.run(ctx, "diff", "--end-of-options", revRange)
 }
 
 // DiffStaged runs `git diff --cached` and returns the unified diff of staged
@@ -130,7 +130,7 @@ func (r *Runner) LogSince(ctx context.Context, since time.Time) ([]Commit, error
 // DiffForCommit runs `git show --format= <hash>` and returns the unified diff
 // introduced by that single commit (no commit message, just the diff body).
 func (r *Runner) DiffForCommit(ctx context.Context, hash string) (string, error) {
-	return r.run(ctx, "show", "--format=", hash)
+	return r.run(ctx, "show", "--format=", "--end-of-options", hash)
 }
 
 // ObjectExists runs `git cat-file -e <sha>^{commit}` and reports whether the
@@ -138,7 +138,7 @@ func (r *Runner) DiffForCommit(ctx context.Context, hash string) (string, error)
 // SHA, ...) is false, never an error — this is a boolean probe, not an
 // operation that can "fail".
 func (r *Runner) ObjectExists(ctx context.Context, sha string) bool {
-	_, err := r.run(ctx, "cat-file", "-e", sha+"^{commit}")
+	_, err := r.run(ctx, "cat-file", "-e", "--end-of-options", sha+"^{commit}")
 	return err == nil
 }
 
@@ -147,7 +147,7 @@ func (r *Runner) ObjectExists(ctx context.Context, sha string) bool {
 // parameter, not a hardcoded "origin": in fork workflows the PR's repository
 // is often configured as "upstream" while "origin" points at the fork.
 func (r *Runner) FetchRef(ctx context.Context, remote, ref string) error {
-	_, err := r.run(ctx, "fetch", "--no-tags", remote, ref)
+	_, err := r.run(ctx, "fetch", "--no-tags", "--end-of-options", remote, ref)
 	return err
 }
 
@@ -170,7 +170,7 @@ func (r *Runner) RemoteNames(ctx context.Context) ([]string, error) {
 // RemoteURL runs `git remote get-url <remote>` and returns the fetch URL.
 // A nonexistent remote is an error (git exits non-zero).
 func (r *Runner) RemoteURL(ctx context.Context, remote string) (string, error) {
-	out, err := r.run(ctx, "remote", "get-url", remote)
+	out, err := r.run(ctx, "remote", "get-url", "--end-of-options", remote)
 	if err != nil {
 		return "", err
 	}

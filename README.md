@@ -55,8 +55,9 @@ go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # non-zero exit on high r
 # estimate cost without making an API call
 go run ./cmd/gitl review HEAD~5..HEAD --dry-run
 
-# custom system-prompt template (e.g. your team's review policy)
-go run ./cmd/gitl review HEAD~5..HEAD --system-template=./review-policy.md
+# custom system-prompt template (e.g. your team's review policy) — set via
+# config only (prompt.system_template_file); there is no --system-template flag
+# see Configuration → Custom templates below
 
 # skip the on-disk LLM cache (always call the model)
 go run ./cmd/gitl review HEAD~5..HEAD --no-cache
@@ -170,6 +171,11 @@ When reviewing interactively (`md` or `text` format on a TTY), `gitl` streams to
 to the terminal as they arrive — no waiting for the full response. Streaming is on by
 default and switches off automatically in CI (non-TTY stdout) or with `--format=json`.
 
+Streaming is currently implemented **only for the OpenAI-compatible provider**
+(`openai` / `ollama` / `azure_openai`). With the native `anthropic` or `gemini`
+provider, `gitl` transparently produces the same review as a single buffered
+response (no token-by-token output) regardless of `output.stream` / `--no-stream`.
+
 ```yaml
 output:
   stream: true   # default; set false to always buffer
@@ -191,20 +197,31 @@ cache:
 Cache lives in `~/.cache/gitl/review/` (XDG-compliant). Disable per-call:
 `gitl review HEAD~5..HEAD --no-cache`
 
-### Custom templates (`output.system_template`)
+### Custom templates (`prompt.system_template_file` / `output.template_file`)
 
-Supply your own system prompt to steer the model's review focus — security checklist,
-architecture constraints, team-specific rules:
+Two independent, config-only overrides (there is no CLI flag for either):
 
-```yaml
-output:
-  system_template: "./review-policy.md"   # path relative to CWD
-```
+- **`prompt.system_template_file`** — your own **review system prompt**, to steer
+  the model's focus (security checklist, architecture constraints, team rules):
 
-Override per-call: `gitl review HEAD~5..HEAD --system-template=./my-policy.md`
+  ```yaml
+  prompt:
+    system_template_file: "./review-policy.md"   # path relative to CWD
+  ```
 
-The template has access to `{{ .Commits }}`, `{{ .Diff }}`, `{{ .RepoName }}` and
-the full set of template functions documented in `internal/prompt/templates.go`.
+  The system-prompt template has access to `{{ .Commits }}`, `{{ .Diff }}`,
+  `{{ .Range }}`, `{{ .Staged }}` (see `internal/prompt/templates.go`).
+
+- **`output.template_file`** — your own **`md`-format render template** for the
+  finished review artifact:
+
+  ```yaml
+  output:
+    template_file: "./review-output.tmpl"   # path relative to CWD
+  ```
+
+  The output template has the render template functions in
+  `internal/render/render.go` (`render.TemplateFuncs()`).
 
 ## GitHub Action
 
