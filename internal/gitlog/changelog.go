@@ -161,10 +161,11 @@ func breakingFooter(body string) (text string, found bool) {
 }
 
 // MissingRequiredCategories reports which of the required category names
-// have zero entries in cl, preserving the input order (§9.3). Unknown
-// category names (typos in policy config) are reported too — CategorizeCommits
-// only ever writes to CategoryOrder keys, so an unknown name is always
-// "missing".
+// have zero entries in cl, sorted alphabetically for a deterministic CI
+// message regardless of the order required categories were configured in
+// (§9.3). Unknown category names (typos in policy config) are reported too —
+// CategorizeCommits only ever writes to CategoryOrder keys, so an unknown
+// name is always "missing".
 func MissingRequiredCategories(cl Changelog, required []string) []string {
 	var missing []string
 	for _, name := range required {

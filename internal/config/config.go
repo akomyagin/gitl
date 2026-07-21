@@ -16,6 +16,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -351,6 +352,28 @@ func (c *Config) validate() error {
 	}
 	if err := validateTemplateFile("output.template_file", c.Output.TemplateFile, render.TemplateFuncs()); err != nil {
 		return err
+	}
+
+	// matchesAnyGlob (internal/cli) swallows path.Match errors on every call —
+	// a malformed pattern would otherwise silently match nothing forever with
+	// no diagnostic. Catch it once, here, at config-load time instead.
+	if err := validateExcludeGlobs("diff.exclude_globs", c.Diff.ExcludeGlobs); err != nil {
+		return err
+	}
+	if err := validateExcludeGlobs("policy.exclude_globs", c.Policy.ExcludeGlobs); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateExcludeGlobs rejects any pattern path.Match would reject as
+// malformed (e.g. an unterminated "["). Matched against a dummy path — only
+// pattern syntax is checked here, not whether it matches anything real.
+func validateExcludeGlobs(key string, globs []string) error {
+	for _, g := range globs {
+		if _, err := path.Match(g, "x"); err != nil {
+			return fmt.Errorf("%s: invalid glob pattern %q: %w", key, g, err)
+		}
 	}
 	return nil
 }

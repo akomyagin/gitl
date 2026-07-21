@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -203,6 +204,36 @@ func TestValidateNormalizesFailOnCase(t *testing.T) {
 	}
 	if cfg.Policy.FailOn != "high" {
 		t.Errorf("fail_on = %q, want normalized \"high\"", cfg.Policy.FailOn)
+	}
+}
+
+// TestValidateRejectsMalformedExcludeGlob proves a syntactically invalid glob
+// pattern (an unterminated "[") fails config-load with a clear error, instead
+// of silently matching nothing on every file forever (matchesAnyGlob in
+// internal/cli swallows path.Match errors on every call — this is the single
+// point that catches it).
+func TestValidateRejectsMalformedExcludeGlob(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "diff:\n  exclude_globs: [\"[unterminated\"]\n")
+	_, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err == nil {
+		t.Fatal("expected error for malformed diff.exclude_globs pattern")
+	}
+	if !strings.Contains(err.Error(), "diff.exclude_globs") {
+		t.Errorf("error = %q, want it to name diff.exclude_globs", err.Error())
+	}
+}
+
+// TestValidateAcceptsValidExcludeGlobs proves ordinary glob patterns
+// (including "**"-suffixed ones, valid per path.Match even though gitl treats
+// the ** specially — see matchesAnyGlob) don't trip the new validation.
+func TestValidateAcceptsValidExcludeGlobs(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "diff:\n  exclude_globs: [\"*.lock\", \"vendor/**\"]\npolicy:\n  exclude_globs: [\"testdata/*\"]\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err != nil {
+		t.Errorf("Load() error = %v, want valid patterns accepted", err)
 	}
 }
 

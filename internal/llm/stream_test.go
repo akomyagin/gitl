@@ -74,6 +74,33 @@ func TestStreamHappyPath(t *testing.T) {
 	}
 }
 
+func TestStreamAcceptsDataFieldWithoutLeadingSpace(t *testing.T) {
+	t.Parallel()
+
+	// Per the SSE spec the single space after "data:" is optional — OpenAI
+	// always sends it, but a self-hosted OpenAI-compatible base_url isn't
+	// guaranteed to. Uses "data:" (no space) throughout.
+	payload := "data:{\"choices\":[{\"delta\":{\"content\":\"Hello \"}}]}\n\n" +
+		"data:{\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n" +
+		"data:[DONE]\n\n"
+
+	srv := sseServer(t, payload)
+	defer srv.Close()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	resp, err := c.Stream(context.Background(), Request{User: "hi", Model: "gpt-4o-mini"}, &w)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if !strings.Contains(w.String(), "Hello world") {
+		t.Errorf("streamed output missing text for no-space \"data:\" lines; got %q", w.String())
+	}
+	if !strings.Contains(resp.Content, "Hello world") {
+		t.Errorf("resp.Content missing body text for no-space \"data:\" lines; got %q", resp.Content)
+	}
+}
+
 func TestStreamMissingRiskBlockFallsBackToHeuristic(t *testing.T) {
 	t.Parallel()
 

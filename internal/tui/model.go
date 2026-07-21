@@ -12,11 +12,9 @@ import (
 // pre-rendered digest as a slice of lines and a scroll offset; all data is
 // computed before the TUI starts, so Update only handles navigation.
 type Model struct {
-	art    render.DigestArtifact
 	lines  []string
 	offset int
 	height int
-	width  int
 	ready  bool
 }
 
@@ -26,7 +24,7 @@ func New(art render.DigestArtifact) Model {
 	var buf strings.Builder
 	_ = render.RenderDigest(&buf, art, render.FormatText)
 	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
-	return Model{art: art, lines: lines}
+	return Model{lines: lines}
 }
 
 func (m Model) Init() tea.Cmd { return nil }
@@ -38,7 +36,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.height < 0 {
 			m.height = 0 // tiny terminal: clamp so View never slices with a negative end
 		}
-		m.width = msg.Width
 		m.ready = true
 	case tea.KeyMsg:
 		switch msg.String() {
