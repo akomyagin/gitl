@@ -9,7 +9,7 @@
 # Build from the REPOSITORY ROOT (the build needs the Go sources and
 # ci/comment.sh, both outside this directory):
 #
-#     docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:dev .
+#     docker build -f bitbucket-pipe/Dockerfile -t alkom68/gitl-review-pipe:dev .
 #
 # Supply-chain note (deliberate architectural difference from the GitLab
 # component): everything the pipe executes — the gitl binary, ci/comment.sh

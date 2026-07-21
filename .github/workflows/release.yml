@@ -162,8 +162,8 @@ jobs:
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           MANIFEST_IMAGE=$(grep -E '^image:' bitbucket-pipe/pipe.yml | sed 's/^image: *//; s/"//g; s/[[:space:]]//g')
-          if [ "$MANIFEST_IMAGE" != "akomyagin/gitl-review-pipe:${VERSION}" ]; then
-            printf 'ERROR: bitbucket-pipe/pipe.yml image="%s" does not match release tag "%s" (expected akomyagin/gitl-review-pipe:%s)\n' \
+          if [ "$MANIFEST_IMAGE" != "alkom68/gitl-review-pipe:${VERSION}" ]; then
+            printf 'ERROR: bitbucket-pipe/pipe.yml image="%s" does not match release tag "%s" (expected alkom68/gitl-review-pipe:%s)\n' \
               "$MANIFEST_IMAGE" "$GITHUB_REF_NAME" "$VERSION"
             echo 'Update bitbucket-pipe/pipe.yml image: before tagging.'
             exit 1
@@ -180,7 +180,7 @@ jobs:
           DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
-            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets are not set — skipping Docker image publish. Create them in repo settings (Docker Hub access token with write scope for akomyagin/gitl-review-pipe) to enable."
+            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets are not set — skipping Docker image publish. Create them in repo settings (Docker Hub access token with write scope for alkom68/gitl-review-pipe) to enable."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -194,7 +194,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
-          IMAGE="akomyagin/gitl-review-pipe"
+          IMAGE="alkom68/gitl-review-pipe"
           printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
           # Build args mirror goreleaser's ldflags so `gitl version` inside
           # the image reports this release (see bitbucket-pipe/Dockerfile).
