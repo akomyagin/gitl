@@ -1,0 +1,15 @@
+# Keeps the Docker build context (bitbucket-pipe/Dockerfile builds from repo
+# root) to roughly what it actually COPYs — go.mod/go.sum, cmd/, internal/,
+# ci/comment.sh, bitbucket-pipe/pipe.sh. Everything below is safe to exclude:
+# it isn't referenced by any COPY and only adds daemon-upload time / cache
+# churn when unrelated files (docs, README) change.
+.git/
+docs/
+npm/
+*.md
+.github/
+.gitea/
+.gitlab-ci-selftest.yml
+templates/
+dist/
+bin/

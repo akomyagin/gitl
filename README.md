@@ -399,6 +399,82 @@ example — is [`.gitlab-ci-selftest.yml`](.gitlab-ci-selftest.yml) (runnable as
 > than a tag (tags are movable). Publishing this component to the GitLab
 > CI/CD Catalog would remove the fetch entirely — planned, not done yet.
 
+## Bitbucket Pipelines (experimental)
+
+The Bitbucket integration ships as a [Pipe](https://support.atlassian.com/bitbucket-cloud/docs/what-are-pipes/) —
+and pipes are Docker images by definition, so unlike the GitHub/Gitea action and the
+GitLab component (plain YAML wrappers) this one is a self-contained image:
+[`bitbucket-pipe/Dockerfile`](bitbucket-pipe/Dockerfile) builds a static `gitl`
+binary and bakes in the shared [`ci/comment.sh`](ci/comment.sh) renderer plus the
+entrypoint [`bitbucket-pipe/pipe.sh`](bitbucket-pipe/pipe.sh). The pipe resolves the
+PR range (`$BITBUCKET_PR_DESTINATION_COMMIT..$BITBUCKET_COMMIT`), runs
+`gitl review --format=json`, and creates/updates a **sticky PR comment** through the
+Bitbucket Cloud REST API (same `<!-- gitl-review -->` marker as on the other
+platforms). Variables reference: [`bitbucket-pipe/pipe.yml`](bitbucket-pipe/pipe.yml).
+
+> **Image status.** The image is **not published to Docker Hub yet** — the
+> release workflow's `docker-publish` job skips the push until
+> `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets are provisioned (same
+> graceful-skip pattern as npm). Until then, build it yourself from the
+> repository root:
+> `docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:0.4.3 .`
+> and push it to a registry your pipeline can pull from.
+
+```yaml
+# bitbucket-pipelines.yml
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: gitl review
+          clone:
+            depth: full   # the default depth-50 clone may not contain the PR base commit
+          script:
+            - pipe: docker://akomyagin/gitl-review-pipe:0.4.3
+              variables:
+                GITL_API_KEY: $GITL_API_KEY                    # BYOK; omit for offline review
+                GITL_BITBUCKET_TOKEN: $GITL_BITBUCKET_TOKEN    # posts the PR comment
+                # FAIL_ON: "high"        # default "never" — comment only, no gate
+                # MAX_COST_USD: "0.50"
+```
+
+Setup — two **secured** repository/workspace variables (Repository settings →
+Pipelines → Repository variables; always referenced as `$VAR`, never literal values
+in the YAML):
+
+- **`GITL_API_KEY`** — the BYOK LLM key. Optional: without it gitl runs the
+  deterministic **offline review** (no network, no cost).
+- **`GITL_BITBUCKET_TOKEN`** — credential for posting the PR comment: a
+  repository/project/workspace **access token** with the `pullrequest:write`
+  scope, sent as `Authorization: Bearer`. Alternative: set
+  `GITL_BITBUCKET_USER` + `GITL_BITBUCKET_APP_PASSWORD` (app password with
+  `pullrequest:write`) for Basic auth instead. If neither is configured the
+  pipe fails fast with an explicit message — before spending any LLM budget.
+
+> **Supply-chain note (why this differs from the GitLab component).** The pipe
+> executes nothing fetched at run time: the `gitl` binary, `ci/comment.sh` and
+> the entrypoint are all built into the versioned image from one source tree.
+> The GitLab component has to download `ci/comment.sh` over the network with no
+> integrity check (see its trust note above); the pipe closes that gap by
+> construction.
+
+> **Verification status — read before relying on this.** The image build and
+> the full in-container flow were verified locally: `docker build` from this
+> repo, then `docker run` against a real test git repository with emulated
+> `BITBUCKET_*` variables — offline review → correct sticky `comment.md` →
+> comment create (`POST`), sticky update (`PUT`, still exactly one comment)
+> and `--fail-on` exit-code propagation, exercised end-to-end against a local
+> mock of the Bitbucket comments API; the fail-fast paths (missing
+> credential/PR variables) and the fallback notice on a bad range were also
+> exercised in the container. What's **not yet verified**: anything touching
+> real Bitbucket infrastructure — the REST calls against api.bitbucket.org
+> (shapes taken from Atlassian's API docs), the exact predefined variables
+> inside a live PR pipeline (`BITBUCKET_PR_DESTINATION_COMMIT` etc. are
+> documented assumptions, not observed values), and how Pipelines mounts the
+> clone into pipe containers. Treat the *live pipeline* path as experimental
+> until someone confirms a green run on a real Bitbucket workspace; bug
+> reports welcome.
+
 ## License
 
 [MIT](LICENSE).

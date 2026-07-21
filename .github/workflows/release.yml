@@ -123,3 +123,68 @@ jobs:
           # for the `gitl-cli` package). It is NOT provisioned by this repo.
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish
+
+  docker-publish:
+    # Bitbucket Pipe image (bitbucket-pipe/): pipes are Docker images by
+    # definition, so the release ships a versioned image with the gitl binary
+    # built from this tag's sources plus ci/comment.sh baked in (no runtime
+    # fetch — the supply-chain property documented in bitbucket-pipe/pipe.sh).
+    # `needs: [release]` orders it after the binaries like npm-publish —
+    # an image tag should never exist for a tag whose release failed.
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Same version-sync invariant as "Verify action.yml version pin" in the
+      # release job (docs/TECHNICAL_PLAN.md §12.2): the manifest's image tag
+      # must match the release tag (without the "v" prefix), or consumers of
+      # the pipe directory would pull an image built from different sources.
+      - name: Verify pipe.yml image tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST_IMAGE=$(grep -E '^image:' bitbucket-pipe/pipe.yml | sed 's/^image: *//; s/"//g; s/[[:space:]]//g')
+          if [ "$MANIFEST_IMAGE" != "akomyagin/gitl-review-pipe:${VERSION}" ]; then
+            printf 'ERROR: bitbucket-pipe/pipe.yml image="%s" does not match release tag "%s" (expected akomyagin/gitl-review-pipe:%s)\n' \
+              "$MANIFEST_IMAGE" "$GITHUB_REF_NAME" "$VERSION"
+            echo 'Update bitbucket-pipe/pipe.yml image: before tagging.'
+            exit 1
+          fi
+          echo "OK: pipe.yml image=$MANIFEST_IMAGE"
+
+      # Until the secrets are provisioned, skip publishing instead of failing
+      # the release: the binaries are already out by this point (same pattern
+      # as the NPM_TOKEN check above).
+      - name: Check Docker Hub secrets configured
+        id: dockerhub_check
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::warning::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets are not set — skipping Docker image publish. Create them in repo settings (Docker Hub access token with write scope for akomyagin/gitl-review-pipe) to enable."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build and push pipe image
+        if: steps.dockerhub_check.outputs.skip != 'true'
+        env:
+          # Secrets only via env (docs/TECHNICAL_PLAN.md §12.5): the token is
+          # piped to `docker login` on stdin, never on argv, never echoed.
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          IMAGE="akomyagin/gitl-review-pipe"
+          printf '%s' "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+          # Build args mirror goreleaser's ldflags so `gitl version` inside
+          # the image reports this release (see bitbucket-pipe/Dockerfile).
+          docker build -f bitbucket-pipe/Dockerfile \
+            --build-arg GITL_VERSION="$VERSION" \
+            --build-arg GITL_COMMIT="$GITHUB_SHA" \
+            --build-arg GITL_DATE="$(git log -1 --format=%cI)" \
+            -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
+          docker push "$IMAGE:$VERSION"
+          docker push "$IMAGE:latest"
