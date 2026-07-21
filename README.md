@@ -21,7 +21,7 @@ storage. **BYOK** (bring your own key) with multi-provider support: OpenAI-compa
 Ollama (local/self-hosted), Azure OpenAI, native Anthropic (Claude), Google Gemini.
 No telemetry.
 
-> **Status:** `v0.4.0` released — all three commands work on real repositories with all
+> **Status:** `v0.4.1` released — all three commands work on real repositories with all
 > three output formats (`md|text|json`). The Action posts AI reviews as sticky PR comments
 > and gates on risk score. Release binaries are cross-compiled, cosign-signed, and covered
 > by SLSA L3 build provenance (see [VERIFY.md](VERIFY.md)).
@@ -248,7 +248,7 @@ jobs:
         with:
           fetch-depth: 0    # required: without full history base..head won't resolve
 
-      - uses: akomyagin/gitl@v0.4.0
+      - uses: akomyagin/gitl@v0.4.1
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, see below
           fail-on: high                               # optional: block merge on high risk
