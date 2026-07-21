@@ -334,6 +334,71 @@ Gitea's Actions secrets, never into the YAML — same BYOK rules as on GitHub.
 > end-to-end inside real Gitea Actions; bug reports from real instances are very
 > welcome.
 
+## GitLab CI (experimental)
+
+gitl also ships a [GitLab CI/CD component](https://docs.gitlab.com/ee/ci/components/) —
+[`templates/gitl-review.yml`](templates/gitl-review.yml) — mirroring the GitHub Action:
+it installs gitl with `go install` at a pinned version, reviews the merge request's
+range (`$CI_MERGE_REQUEST_DIFF_BASE_SHA..$CI_COMMIT_SHA`), renders the comment through
+the shared platform-neutral [`ci/comment.sh`](ci/comment.sh), and creates/updates a
+**sticky MR note** through GitLab's REST API (same `<!-- gitl-review -->` marker as on
+GitHub/Gitea). The job only runs in merge request pipelines.
+
+This repository lives on GitHub, so the component is not in a GitLab CI/CD Catalog
+yet — consume it via `include:remote` (inputs work with remote includes):
+
+```yaml
+# .gitlab-ci.yml
+include:
+  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.4.3/templates/gitl-review.yml"
+    inputs:
+      fail_on: "never"      # default; set "high" to block risky MRs
+      # max_cost_usd: "0.50"
+      # gitl_version: "v0.4.3"
+```
+
+Setup — two CI/CD variables (Settings → CI/CD → Variables, both **masked**, never
+in YAML):
+
+- **`GITL_API_KEY`** — the BYOK LLM key. Optional: without it gitl runs the
+  deterministic **offline review** (no network, no cost). Defining the project
+  variable is enough — it takes precedence over the component's empty
+  `gitl_api_key` input default. If you use the input instead, pass a *variable
+  reference* (`gitl_api_key: $MY_LLM_KEY`), never a literal key: input values are
+  interpolated into the pipeline config.
+- **`GITL_GITLAB_TOKEN`** — token for posting the MR note (project access token or
+  PAT, `api` scope, Reporter role or higher; sent as `PRIVATE-TOKEN`). If unset,
+  the job falls back to `CI_JOB_TOKEN` (`JOB-TOKEN` header) — but on most GitLab
+  configurations `CI_JOB_TOKEN` is **not** authorized for the Notes API, so the
+  fallback is expected to fail (with an explicit error message, not a silent
+  skip). An explicit `GITL_GITLAB_TOKEN` is the reliable path.
+
+A full commented self-test pipeline — also the closest thing to a complete usage
+example — is [`.gitlab-ci-selftest.yml`](.gitlab-ci-selftest.yml) (runnable as
+`.gitlab-ci.yml` in a GitLab mirror of this repo).
+
+> **Verification status — read before relying on this.** The GitLab REST calls
+> (list MR notes + sticky-marker detection, `POST` create, `PUT` update) and the
+> component YAML itself (`spec:`/`inputs:` interpolation, `include:local` with
+> inputs, via the CI Lint API) were verified end-to-end against a real local
+> GitLab CE instance (`gitlab/gitlab-ce` 19.2.0 in Docker) on a real merge
+> request — list-empty → POST-create → re-list-finds-it → PUT-update → still
+> exactly one note — using the exact `curl`/`jq` commands from the template. What's **not yet
+> verified** is a live pipeline run: the values of
+> `CI_MERGE_REQUEST_DIFF_BASE_SHA`/`CI_COMMIT_SHA`/`CI_JOB_URL` inside a real
+> merge-request pipeline are written from GitLab docs, not observed, and the
+> `CI_JOB_TOKEN`-fallback rejection is documented per GitLab's job-token
+> allowlist docs, not reproduced. Treat the *pipeline* path as experimental
+> until someone confirms a green end-to-end run; bug reports welcome.
+
+> **Trust note.** The component downloads `ci/comment.sh` from
+> `raw.githubusercontent.com` at `gitl_version` and executes it — with no
+> checksum/signature check, same trust boundary as the `go install
+> ...@${gitl_version}` line right above it (same repo, same ref). If that
+> matters for your threat model, pin `gitl_version` to a commit SHA rather
+> than a tag (tags are movable). Publishing this component to the GitLab
+> CI/CD Catalog would remove the fetch entirely — planned, not done yet.
+
 ## License
 
 [MIT](LICENSE).
