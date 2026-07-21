@@ -121,13 +121,19 @@ func resolveDigestRepos(cmd *cobra.Command, cfg *config.Config) ([]string, error
 	if len(cfg.Digest.Repos) > 0 {
 		paths := make([]string, 0, len(cfg.Digest.Repos))
 		for _, r := range cfg.Digest.Repos {
-			p := r.Path
+			p := strings.TrimSpace(r.Path)
+			if p == "" {
+				continue
+			}
 			if !filepath.IsAbs(p) {
 				if abs, err := filepath.Abs(p); err == nil {
 					p = abs
 				}
 			}
 			paths = append(paths, p)
+		}
+		if len(paths) == 0 {
+			return nil, fmt.Errorf("digest.repos configured but contained no non-empty repository paths")
 		}
 		return paths, nil
 	}

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -106,6 +107,32 @@ func TestEnvOverridesFiles(t *testing.T) {
 	}
 	if cfg.OfflineMode() {
 		t.Error("expected online mode with GITL_API_KEY set")
+	}
+}
+
+// TestEnvPolicyListKeys proves the two policy list keys are reachable via env.
+// Viper's AutomaticEnv only consults env vars for keys it already knows about,
+// so without defaults() entries for policy.exclude_globs /
+// policy.required_changelog_categories these env vars were silently ignored.
+// Comma-separated values decode via viper's default StringToSlice hook.
+func TestEnvPolicyListKeys(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Setenv("GITL_POLICY_EXCLUDE_GLOBS", "*.gen.go,docs/**")
+	t.Setenv("GITL_POLICY_REQUIRED_CHANGELOG_CATEGORIES", "Added,Fixed")
+
+	cfg, err := Load(Options{
+		RepoDir:      dir,
+		PersonalPath: filepath.Join(dir, "does-not-exist.yaml"),
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got, want := cfg.Policy.ExcludeGlobs, []string{"*.gen.go", "docs/**"}; !slices.Equal(got, want) {
+		t.Errorf("policy.exclude_globs = %v, want %v from env", got, want)
+	}
+	if got, want := cfg.Policy.RequiredChangelogCategories, []string{"Added", "Fixed"}; !slices.Equal(got, want) {
+		t.Errorf("policy.required_changelog_categories = %v, want %v from env", got, want)
 	}
 }
 

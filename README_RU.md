@@ -233,6 +233,15 @@ cache:
   Шаблон вывода получает render-функции из `internal/render/render.go`
   (`render.TemplateFuncs()`).
 
+> **Про доверие:** `prompt.system_template_file`/`output.template_file` можно
+> задать через repo-level `.gitl.yaml`, а не только в личном конфиге — значит
+> `gitl review` на склонированном чужом/недоверенном репозитории может
+> указать на шаблон *внутри этого же репозитория*. Это осознанный механизм
+> для team-shared review policy, не баг: `text/template` здесь не читает
+> произвольные файлы и не исполняет код, но к `.gitl.yaml` недоверенного
+> репозитория стоит относиться с той же осторожностью, что и к его
+> `.git/hooks` или build-скриптам.
+
 ## GitHub Action
 
 `gitl` можно подключить как GitHub Action: он AI-ревьюит коммиты пул-реквеста

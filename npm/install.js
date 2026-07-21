@@ -107,15 +107,28 @@ function verifyChecksum(archive, asset, sumsText) {
 // npm dependencies a correct parser is the riskier path, while `tar` ships on
 // every platform this package supports — Linux, macOS, and Windows 10+ (whose
 // bundled bsdtar extracts .zip archives too, covering the windows asset).
+//
+// Extraction goes through a same-directory temp dir + rename() rather than
+// straight into bin/, so two concurrent installs sharing one node_modules
+// (e.g. a parallel CI matrix) never race on a partially-written binary: each
+// extracts into its own uniquely-named temp dir, then atomically renames the
+// result into bin/. The temp dir is created next to bin/ (not os.tmpdir())
+// specifically so the final rename() stays on one filesystem — crossing
+// filesystems would make rename() fail with EXDEV instead of being atomic.
 function extract(archive, asset) {
   const binDir = path.join(__dirname, 'bin');
   fs.mkdirSync(binDir, { recursive: true });
-  const tmp = path.join(os.tmpdir(), `gitl-cli-${process.pid}-${asset}`);
-  fs.writeFileSync(tmp, archive);
+  const tmpArchive = path.join(os.tmpdir(), `gitl-cli-${process.pid}-${asset}`);
+  fs.writeFileSync(tmpArchive, archive);
+  const tmpExtractDir = fs.mkdtempSync(path.join(__dirname, '.gitl-extract-'));
   try {
-    execFileSync('tar', ['-xf', tmp, '-C', binDir], { stdio: 'inherit' });
+    execFileSync('tar', ['-xf', tmpArchive, '-C', tmpExtractDir], { stdio: 'inherit' });
+    for (const entry of fs.readdirSync(tmpExtractDir)) {
+      fs.renameSync(path.join(tmpExtractDir, entry), path.join(binDir, entry));
+    }
   } finally {
-    fs.rmSync(tmp, { force: true });
+    fs.rmSync(tmpArchive, { force: true });
+    fs.rmSync(tmpExtractDir, { recursive: true, force: true });
   }
 }
 
