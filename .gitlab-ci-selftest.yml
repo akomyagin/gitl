@@ -23,7 +23,7 @@
 # `remote:` (or `component:` once published to a CI/CD Catalog):
 #
 #   include:
-#     - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.0/templates/gitl-review.yml"
+#     - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.1/templates/gitl-review.yml"
 #       inputs:
 #         fail_on: "never"        # default; set "high" to block risky MRs
 #
