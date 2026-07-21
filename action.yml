@@ -102,6 +102,21 @@ runs:
       run: |
         set -euo pipefail
 
+        # Fail fast (BEFORE any LLM spend) when the PR context is missing:
+        # outside a pull_request event (push/workflow_dispatch/...) the
+        # github.event.pull_request.* fallbacks above are all empty, which
+        # would send a broken ".." range into `gitl review` and only surface
+        # an opaque comment-posting error afterwards — after the LLM budget
+        # is already spent. Same policy as bitbucket-pipe/pipe.sh's
+        # fail-fast block and the GitLab component's merge_request_event
+        # rule. This guard runs before the GitHub/Gitea platform fork below,
+        # so the one check covers both platforms.
+        if [ -z "$GITL_BASE_SHA" ] || [ -z "$GITL_HEAD_SHA" ] || [ -z "$GITL_PR_NUMBER" ]; then
+          echo "gitl: base SHA, head SHA or PR number is empty (base='${GITL_BASE_SHA}' head='${GITL_HEAD_SHA}' pr='${GITL_PR_NUMBER}')." >&2
+          echo "gitl: this action must run on a pull_request event, or be given explicit base-sha/head-sha/pr-number inputs." >&2
+          exit 1
+        fi
+
         GITL_RANGE="${GITL_BASE_SHA}..${GITL_HEAD_SHA}"
 
         # Single gitl invocation (one LLM call at most, §12.3): --format=json
@@ -155,6 +170,17 @@ runs:
           fi
           GITL_API_URL="${GITHUB_API_URL:-${GITHUB_SERVER_URL}/api/v1}"
 
+          # Fail fast if there is no token to authenticate with: unlike
+          # GitHub (where github.token always exists), a Gitea instance may
+          # leave the github.token fallback empty or useless, and curl would
+          # only surface an opaque 401/403 later. Same explicit-token-check
+          # policy as the GitLab component and bitbucket-pipe/pipe.sh.
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "gitl: no API token available for the Gitea comment API — set the 'github-token' input." >&2
+            echo "gitl: on Gitea Actions the workflow's github.token may be absent or lack permissions; pass a token with write access to the repository's issues/PRs." >&2
+            exit 1
+          fi
+
           # Gitea API auth header ("Authorization: token <t>",
           # docs.gitea.com/development/api-usage). The header is fed to curl
           # on stdin (-H @-), NOT as an argv element: argv is readable by
@@ -168,10 +194,16 @@ runs:
           }
 
           # PRs are issues in Gitea's API, so the PR number is the issue
-          # index. Like the gh branch below, only the first page of comments
-          # is scanned — fine for the sticky marker on real-world PR threads.
+          # index. Explicit asc sort + `last` keeps "most recent match wins"
+          # semantics regardless of the API's default ordering (same pattern
+          # as the GitLab component's ?order_by=created_at&sort=asc). Gitea
+          # returns issue comments in ascending creation order by default and
+          # ignores unknown query parameters, so these params are best-effort
+          # explicitness — TODO: verify the exact sort parameter names on a
+          # real Gitea instance. One 100-item page is plenty for the sticky
+          # marker on real-world PR threads.
           EXISTING_ID=$(gitea_api \
-            "${GITL_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments" \
+            "${GITL_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments?sort=created&direction=asc&limit=100" \
             | jq -r '[.[] | select(.body | startswith("<!-- gitl-review -->"))] | last | .id // empty')
 
           # JSON-encode the markdown body with jq (raw slurp) — no hand-rolled
@@ -188,7 +220,14 @@ runs:
               > /dev/null
           fi
         else
-          EXISTING_ID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments" \
+          # Explicit asc sort + `last` keeps "most recent match wins"
+          # semantics regardless of the API's default ordering (same pattern
+          # as the GitLab component). GitHub documents per-issue comments as
+          # ordered by ascending id and ignores unknown query parameters, so
+          # sort/direction are best-effort explicitness; per_page=100 widens
+          # the single scanned page (plenty for the sticky marker on
+          # real-world PR threads).
+          EXISTING_ID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments?sort=created&direction=asc&per_page=100" \
             --jq '[.[] | select(.body | startswith("<!-- gitl-review -->"))] | last | .id // empty')
 
           if [ -n "$EXISTING_ID" ]; then
