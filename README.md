@@ -417,7 +417,7 @@ platforms). Variables reference: [`bitbucket-pipe/pipe.yml`](bitbucket-pipe/pipe
 > `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets are provisioned (same
 > graceful-skip pattern as npm). Until then, build it yourself from the
 > repository root:
-> `docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:0.5.1 .`
+> `docker build -f bitbucket-pipe/Dockerfile -t alkom68/gitl-review-pipe:0.5.1 .`
 > and push it to a registry your pipeline can pull from.
 
 ```yaml
@@ -430,7 +430,7 @@ pipelines:
           clone:
             depth: full   # the default depth-50 clone may not contain the PR base commit
           script:
-            - pipe: docker://akomyagin/gitl-review-pipe:0.5.1
+            - pipe: docker://alkom68/gitl-review-pipe:0.5.1
               variables:
                 GITL_API_KEY: $GITL_API_KEY                    # BYOK; omit for offline review
                 GITL_BITBUCKET_TOKEN: $GITL_BITBUCKET_TOKEN    # posts the PR comment
