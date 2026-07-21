@@ -227,7 +227,8 @@ Two independent, config-only overrides (there is no CLI flag for either):
 
 `gitl` can be wired up as a GitHub Action: it AI-reviews a pull request's commits and
 posts a comment with the risk score, optionally blocking merge above a threshold. The
-Action builds `gitl` from source (`go install` at a pinned version).
+Action builds `gitl` from source (`go install` at a pinned version). Also listed on the
+[GitHub Marketplace](https://github.com/akomyagin/gitl) if you'd rather add it from there.
 
 Add `.github/workflows/gitl-review.yml` to your repository:
 
