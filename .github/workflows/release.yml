@@ -64,7 +64,14 @@ jobs:
       actions: read    # read workflow run for provenance metadata
       id-token: write  # OIDC token for keyless signing
       contents: write  # upload provenance to the release
-    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@f7dd8c54c2067bafc12ca7a55595d5ee9b75204a # v2.1.0
+    # Pinned by tag, not commit SHA, deliberately deviating from this repo's
+    # usual SHA-pin convention for third-party actions: slsa-github-generator's
+    # own docs require its reusable workflows be referenced by tag (@vX.Y.Z) —
+    # slsa-verifier resolves the trusted builder by tag, so a SHA pin here
+    # makes every subsequent `slsa-verifier verify-artifact` fail with
+    # "invalid ref: ... unexpected ref type" (confirmed by reproducing the
+    # failure against the v0.4.0 release with the latest slsa-verifier).
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0
     with:
       base64-subjects: ${{ needs.release.outputs.hashes }}
       upload-assets: true
