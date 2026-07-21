@@ -30,6 +30,16 @@ func resolvePricing(errOut io.Writer, cfg *config.Config) (pricing llm.Pricing, 
 		}, true
 	}
 
+	// A one-sided override (only input or only output set) falls through here
+	// rather than being used — flag it explicitly, since the generic
+	// "no pricing data" message below wouldn't otherwise reveal that half of
+	// what the user configured was silently ignored.
+	if cfg.Cost.PricePer1MInput > 0 || cfg.Cost.PricePer1MOutput > 0 {
+		fmt.Fprintf(errOut,
+			"gitl: cost.price_per_1m_input/output must both be set to override pricing — only one is configured for model %q, ignoring both and falling back to the built-in table/no-pricing-data path\n",
+			cfg.LLM.Model)
+	}
+
 	if p, found := llm.LookupPricing(cfg.LLM.Model); found {
 		return p, true
 	}

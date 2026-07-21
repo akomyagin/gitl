@@ -102,7 +102,7 @@ func runChangelog(ctx context.Context, cmd *cobra.Command, gf *globalFlags, args
 
 	missing := gitlog.MissingRequiredCategories(cl, cfg.Policy.RequiredChangelogCategories)
 	for _, name := range missing {
-		slog.Warn(fmt.Sprintf("required changelog category %q has no entries in range %q", name, revRange))
+		slog.Warn("required changelog category has no entries", "category", name, "range", revRange)
 	}
 
 	art := render.NewChangelogArtifact(time.Now().UTC(), revRange, cl, missing)
@@ -224,7 +224,7 @@ func rawCompleterFor(provider llm.Provider, providerName string) (llm.RawComplet
 func renderAIChangelog(cmd *cobra.Command, cfg *config.Config, revRange string, commits []gitlog.Commit, payload llm.ChangelogPayload) error {
 	art := aiChangelogArtifact(time.Now().UTC(), revRange, commits, payload, cfg.Policy.RequiredChangelogCategories)
 	for _, name := range art.MissingRequiredCategories {
-		slog.Warn(fmt.Sprintf("required changelog category %q has no entries in range %q", name, revRange))
+		slog.Warn("required changelog category has no entries", "category", name, "range", revRange)
 	}
 	return render.RenderChangelog(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format))
 }

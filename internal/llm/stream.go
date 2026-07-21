@@ -155,10 +155,17 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 		if line == "" {
 			continue
 		}
-		if !strings.HasPrefix(line, "data: ") {
+		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimPrefix(line, "data: ")
+		// SSE spec: a single leading space after the colon is stripped if
+		// present, but is not required — "data:foo" and "data: foo" are both
+		// valid. OpenAI always sends the space; a self-hosted OpenAI-compatible
+		// base_url (the whole point of multi-provider support) is not
+		// guaranteed to, and silently dropping every line otherwise would
+		// truncate the stream to nothing.
+		data := strings.TrimPrefix(line, "data:")
+		data = strings.TrimPrefix(data, " ")
 		if data == "[DONE]" {
 			break
 		}

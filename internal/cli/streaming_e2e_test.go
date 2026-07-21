@@ -214,3 +214,66 @@ func TestStreamingFallbackEndToEnd(t *testing.T) {
 		t.Error(`second request should be the non-streaming Complete fallback (no "stream":true)`)
 	}
 }
+
+// oneShotJSONHandler serves a single fixed chat/completions-style JSON
+// response regardless of whether the request asked for streaming — used
+// below to distinguish "did wantStream even attempt to stream" from "was the
+// template applied", independent of the streaming-fallback machinery above.
+type oneShotJSONHandler struct {
+	content string
+}
+
+func (h *oneShotJSONHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]any{
+		"choices": []map[string]any{
+			{"message": map[string]any{"role": "assistant", "content": h.content}},
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// TestStreamingDisabledWhenOutputTemplateFileSet proves wantStream's
+// output.template_file gate actually changes behavior on a real TTY: with a
+// custom output.template_file configured, `gitl review` on a PTY must render
+// through that template (buffered path) rather than silently falling back to
+// the raw, un-templated streaming body. Before this gate existed, the marker
+// asserted below would never appear on a real terminal with streaming on.
+func TestStreamingDisabledWhenOutputTemplateFileSet(t *testing.T) {
+	handler := &oneShotJSONHandler{
+		content: "some review body\n```risk\n{\"level\":\"low\",\"summary\":\"ok\"}\n```",
+	}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	dir := setupRepo(t, false)
+
+	tmplPath := filepath.Join(dir, "custom.md.tmpl")
+	if err := os.WriteFile(tmplPath, []byte("CUSTOM-TEMPLATE-MARKER Risk={{.RiskLevel}}"), 0o600); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	cfgYAML := "output:\n" +
+		"  stream: true\n" +
+		"  template_file: " + tmplPath + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".gitl.yaml"), []byte(cfgYAML), 0o600); err != nil {
+		t.Fatalf("write .gitl.yaml: %v", err)
+	}
+
+	env := map[string]string{"GITL_API_KEY": "sk-fake-e2e"}
+	out, err := runReviewOnPTY(t, dir, env, "HEAD~1..HEAD", "--base-url", srv.URL, "--no-cache")
+	if err != nil {
+		t.Fatalf("review must succeed, got: %v", err)
+	}
+
+	if !strings.Contains(out, "CUSTOM-TEMPLATE-MARKER") {
+		t.Errorf("output must go through the custom template (buffered path) when output.template_file is set on a TTY:\n%s", out)
+	}
+	if !strings.Contains(out, "Risk=low") {
+		t.Errorf("custom template's {{.RiskLevel}} substitution missing:\n%s", out)
+	}
+	// The raw model body (not the template) must not leak through — proves
+	// this genuinely went through RenderWithTemplate, not a mix of both paths.
+	if strings.Contains(out, "some review body") {
+		t.Errorf("raw model body leaked into templated output — streaming path was used instead of buffered:\n%s", out)
+	}
+}

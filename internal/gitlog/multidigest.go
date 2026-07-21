@@ -24,9 +24,13 @@ type RepoResult struct {
 
 // CollectDigests runs AggregateDigest over each repository path concurrently,
 // using a bounded worker pool of `concurrency` goroutines communicating over
-// a job-index channel (§10.4) — not an unbounded fan-out, and not a
-// third-party errgroup, per the project's "teach raw stdlib concurrency"
-// principle (docs/TECHNICAL_PLAN.md §2).
+// a job-index channel (§10.4) — not an unbounded fan-out, and this outer pool
+// is hand-rolled on raw channels/sync.WaitGroup rather than errgroup, per the
+// project's "teach raw stdlib concurrency" principle (docs/TECHNICAL_PLAN.md
+// §2). The per-commit diff collection *inside* each repo's AggregateDigest
+// call does use golang.org/x/sync/errgroup (a separate, inner pool) — that
+// choice is scoped to that call site, not a blanket "no errgroup anywhere"
+// rule.
 //
 // Results are written to results[i] by exactly one goroutine (the one that
 // claims job i), so no mutex is needed, and the returned slice preserves the
