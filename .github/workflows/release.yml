@@ -210,3 +210,50 @@ jobs:
           if [[ "$VERSION" != *-* ]]; then
             docker push "$IMAGE:latest"
           fi
+
+  gitlab-mirror:
+    # templates/gitl-review.yml (the GitLab CI/CD component) can only be
+    # published to GitLab's CI/CD Catalog from an actual GitLab project — this
+    # repo's canonical home is GitHub, so a mirror project on GitLab.com (or a
+    # self-hosted instance) is required. This job pushes master + the release
+    # tag there on every tag, matching the "tip == last release tag" invariant
+    # this workflow already relies on elsewhere (§12.2). `needs: [release]`:
+    # don't mirror a tag whose GitHub release failed.
+    #
+    # The mirror is one-way (GitHub → GitLab): master is force-pushed, so
+    # never make manual commits directly on the GitLab side — they'd be
+    # silently overwritten on the next tag.
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # full history: HEAD must carry master's real tip, not just this commit
+
+      # Until the secret is provisioned, skip instead of failing the release
+      # (same graceful-degradation pattern as npm-publish/docker-publish above).
+      - name: Check GITLAB_MIRROR_URL configured
+        id: mirror_check
+        env:
+          GITLAB_MIRROR_URL: ${{ secrets.GITLAB_MIRROR_URL }}
+        run: |
+          if [ -z "$GITLAB_MIRROR_URL" ]; then
+            echo "::warning::GITLAB_MIRROR_URL secret is not set — skipping GitLab mirror push (needed to publish templates/gitl-review.yml to the CI/CD Catalog). Create it: a GitLab project/personal access token (scope write_repository) embedded in the HTTPS clone URL, e.g. https://oauth2:<token>@gitlab.com/<namespace>/<project>.git, to enable."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Push to GitLab mirror
+        if: steps.mirror_check.outputs.skip != 'true'
+        env:
+          # The URL (with embedded credentials) is passed only via env, never
+          # interpolated into this script's text and never echoed — same
+          # discipline as the other secrets in this workflow (§12.5). GitHub
+          # also redacts any occurrence of a registered secret value from job
+          # logs automatically, so git's own push-progress output can't leak
+          # it either.
+          GITLAB_MIRROR_URL: ${{ secrets.GITLAB_MIRROR_URL }}
+        run: |
+          set -euo pipefail
+          git push "$GITLAB_MIRROR_URL" "HEAD:refs/heads/master" --force
+          git push "$GITLAB_MIRROR_URL" "refs/tags/${GITHUB_REF_NAME}"
