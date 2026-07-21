@@ -1,0 +1,67 @@
+# bitbucket-pipe/pipe.yml — Bitbucket Pipe manifest for gitl review.
+#
+# This manifest is what a pipe repository / the Bitbucket pipe directory
+# consumes; plain `- pipe: docker://<image>:<tag>` usage (the way the README
+# documents while the pipe is unpublished) reads only the image itself, in
+# which case this file serves as the authoritative variables reference.
+#
+# Version-sync invariant (same rule as action.yml's gitl-version.default,
+# docs/TECHNICAL_PLAN.md §12.2): the image tag below must match the gitl
+# release the pipe ships with (release tag without the "v" prefix). The
+# docker-publish job in .github/workflows/release.yml verifies this before
+# pushing the image.
+#
+# NOTE: the image is not published to Docker Hub yet (the release workflow
+# skips the push until DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets are
+# provisioned) — until then, build it locally from the repository root:
+#   docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:0.4.3 .
+
+name: gitl review
+image: akomyagin/gitl-review-pipe:0.4.3
+category: Code quality
+description: >-
+  AI review of a pull request's commit range with risk scoring
+  (low|medium|high), a sticky PR comment and optional CI gating.
+  BYOK (OpenAI, Ollama, Azure, Anthropic, Gemini); without a key it runs a
+  deterministic offline review — no network call, no cost.
+repository: https://github.com/akomyagin/gitl
+maintainer:
+  name: Alexander Komyagin
+  website: https://github.com/akomyagin/gitl
+vendor:
+  name: akomyagin
+  website: https://github.com/akomyagin
+tags:
+  - git
+  - ai
+  - code-review
+  - risk
+
+variables:
+  # BYOK LLM key. Optional: empty = deterministic offline review (no network
+  # call, no cost). Store it as a SECURED repository/workspace variable and
+  # pass a reference ($GITL_API_KEY) — never a literal key in the YAML.
+  - name: GITL_API_KEY
+    default: ""
+  # Risk threshold that fails the step (never|low|medium|high). Default
+  # "never": the pipe only comments, it does not block merges, unless the
+  # caller opts in explicitly (project principle: default WARN, hard gate is
+  # explicit opt-in — docs/TECHNICAL_PLAN.md §9/§13).
+  - name: FAIL_ON
+    default: "never"
+  # Cost guard passed through to `gitl review --max-cost-usd`. <=0 disables it.
+  - name: MAX_COST_USD
+    default: "0.50"
+  # Credential for posting the sticky PR comment — one of the two options is
+  # required at run time (the pipe fails fast with a clear message if both
+  # are empty). Always a SECURED variable reference, never a literal.
+  # Option A: access token (repository/project/workspace access token with
+  # the pullrequest:write scope), sent as "Authorization: Bearer <t>".
+  - name: GITL_BITBUCKET_TOKEN
+    default: ""
+  # Option B: Bitbucket username + app password (scope pullrequest:write),
+  # sent as HTTP Basic auth. Ignored when GITL_BITBUCKET_TOKEN is set.
+  - name: GITL_BITBUCKET_USER
+    default: ""
+  - name: GITL_BITBUCKET_APP_PASSWORD
+    default: ""

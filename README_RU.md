@@ -416,6 +416,82 @@ include:
 > GitLab CI/CD Catalog устранила бы это скачивание целиком — запланировано,
 > но ещё не сделано.
 
+## Bitbucket Pipelines (экспериментально)
+
+Интеграция с Bitbucket поставляется как [Pipe](https://support.atlassian.com/bitbucket-cloud/docs/what-are-pipes/) —
+а pipes по определению являются Docker-образами, поэтому, в отличие от GitHub/Gitea
+action и GitLab-компонента (чистые YAML-обёртки), здесь это самодостаточный образ:
+[`bitbucket-pipe/Dockerfile`](bitbucket-pipe/Dockerfile) собирает статический бинарь
+`gitl` и вшивает в образ общий рендер [`ci/comment.sh`](ci/comment.sh) и точку входа
+[`bitbucket-pipe/pipe.sh`](bitbucket-pipe/pipe.sh). Pipe резолвит диапазон PR
+(`$BITBUCKET_PR_DESTINATION_COMMIT..$BITBUCKET_COMMIT`), запускает
+`gitl review --format=json` и создаёт/обновляет **sticky-комментарий PR** через REST
+API Bitbucket Cloud (тот же маркер `<!-- gitl-review -->`, что на остальных
+платформах). Справочник переменных — [`bitbucket-pipe/pipe.yml`](bitbucket-pipe/pipe.yml).
+
+> **Статус образа.** Образ **ещё не опубликован на Docker Hub** — job
+> `docker-publish` релизного workflow пропускает push, пока не заведены секреты
+> `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` (тот же graceful-skip-паттерн, что у
+> npm). До тех пор соберите его сами из корня репозитория:
+> `docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:0.4.3 .`
+> и запушьте в реестр, доступный вашему пайплайну.
+
+```yaml
+# bitbucket-pipelines.yml
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: gitl review
+          clone:
+            depth: full   # дефолтный клон глубиной 50 может не содержать базовый коммит PR
+          script:
+            - pipe: docker://akomyagin/gitl-review-pipe:0.4.3
+              variables:
+                GITL_API_KEY: $GITL_API_KEY                    # BYOK; уберите для offline-ревью
+                GITL_BITBUCKET_TOKEN: $GITL_BITBUCKET_TOKEN    # постит комментарий PR
+                # FAIL_ON: "high"        # по умолчанию "never" — только комментарий, без гейта
+                # MAX_COST_USD: "0.50"
+```
+
+Настройка — две **secured**-переменные репозитория/workspace (Repository settings →
+Pipelines → Repository variables; всегда ссылкой `$VAR`, никогда — литеральные
+значения в YAML):
+
+- **`GITL_API_KEY`** — BYOK-ключ LLM. Опционален: без него gitl выполняет
+  детерминированное **offline-ревью** (без сети и затрат).
+- **`GITL_BITBUCKET_TOKEN`** — креденшал для постинга комментария PR:
+  **access token** репозитория/проекта/workspace со scope `pullrequest:write`,
+  передаётся как `Authorization: Bearer`. Альтернатива: задайте
+  `GITL_BITBUCKET_USER` + `GITL_BITBUCKET_APP_PASSWORD` (app password со scope
+  `pullrequest:write`) — тогда Basic-аутентификация. Если не задано ни то, ни
+  другое — pipe падает сразу с явным сообщением, ещё **до** каких-либо трат на LLM.
+
+> **Supply-chain-заметка (чем это отличается от GitLab-компонента).** Pipe не
+> исполняет ничего, скачанного в рантайме: бинарь `gitl`, `ci/comment.sh` и
+> точка входа собраны в версионированный образ из одного дерева исходников.
+> GitLab-компонент вынужден скачивать `ci/comment.sh` по сети без проверки
+> целостности (см. его trust note выше); pipe закрывает эту брешь по
+> построению.
+
+> **Статус проверки — прочитайте, прежде чем полагаться.** Сборка образа и
+> полный поток внутри контейнера проверены локально: `docker build` из этого
+> репозитория, затем `docker run` на настоящем тестовом git-репозитории с
+> эмулированными переменными `BITBUCKET_*` — offline-ревью → корректный
+> sticky-`comment.md` → создание комментария (`POST`), sticky-обновление
+> (`PUT`, по-прежнему ровно один комментарий) и проброс кода выхода
+> `--fail-on`, прогнаны end-to-end против локального мока comments API
+> Bitbucket; fail-fast-пути (нет креденшала/PR-переменных) и fallback-заметка
+> на битом диапазоне тоже прогнаны в контейнере. Что **ещё не проверено**: всё,
+> что касается настоящей инфраструктуры Bitbucket — REST-вызовы к
+> api.bitbucket.org (формы взяты из документации Atlassian API), точные
+> predefined-переменные внутри живого PR-пайплайна
+> (`BITBUCKET_PR_DESTINATION_COMMIT` и др. — задокументированные допущения, а
+> не наблюдавшиеся значения) и то, как Pipelines монтирует клон в контейнеры
+> pipe'ов. Считайте именно *live-пайплайн-путь* экспериментальным, пока
+> кто-нибудь не подтвердит зелёный прогон на реальном Bitbucket-workspace;
+> баг-репорты приветствуются.
+
 ## MCP-сервер
 
 `gitl mcp` запускает gitl как [Model Context Protocol](https://modelcontextprotocol.io)
