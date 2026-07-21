@@ -103,6 +103,13 @@ gitl-review:
     # Secrets (GITL_API_KEY, GITL_GITLAB_TOKEN, CI_JOB_TOKEN) live in env
     # only: never interpolated into logged command lines, never echoed, and
     # no `set -x` anywhere in this script (docs/TECHNICAL_PLAN.md §12.5).
+    #
+    # Scope note: the `set -euo pipefail` below governs the WHOLE job script,
+    # including every `- |` block that follows. GitLab Runner concatenates
+    # all items of a `script:` list into a single bash script executed by one
+    # shell process (documented runner behaviour — list items are lines of
+    # the same script, not separate shells), so shell options set in the
+    # first list item stay in effect for all subsequent items.
     - set -euo pipefail
     - |
       # ---- install gitl at the pinned ref -------------------------------

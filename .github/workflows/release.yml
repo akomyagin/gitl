@@ -32,13 +32,30 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
+      # Both version-pin checks (this one and "Verify pipe.yml image tag" in
+      # docker-publish) compare the *clean* version — the tag with its
+      # leading "v" stripped — so the two checks stay symmetric even though
+      # action.yml's default keeps the "v" prefix while pipe.yml's image tag
+      # does not.
       - name: Verify action.yml version pin
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          DEFAULT=$(grep -A15 'gitl-version:' action.yml | grep 'default:' | head -1 \
-            | sed 's/.*default: *//; s/"//g; s/[[:space:]]//g')
-          if [ "$DEFAULT" != "$TAG" ]; then
-            printf 'ERROR: action.yml inputs.gitl-version.default="%s" does not match release tag "%s"\n' "$DEFAULT" "$TAG"
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Anchored extraction: take the `default:` line directly inside the
+          # `gitl-version:` input block (4-space indent under the 2-space
+          # key), instead of a fragile `grep -A15` window that could silently
+          # pick up a neighbouring input's default if the block ever grew
+          # past 15 lines.
+          DEFAULT=$(awk '
+            /^  gitl-version:/ { insec = 1; next }
+            insec && /^  [^ ]/ { insec = 0 }
+            insec && /^    default:/ { val = $2; gsub(/"/, "", val); print val; exit }
+          ' action.yml)
+          if [ -z "$DEFAULT" ]; then
+            echo 'ERROR: could not extract inputs.gitl-version.default from action.yml — did its structure change?'
+            exit 1
+          fi
+          if [ "${DEFAULT#v}" != "$VERSION" ]; then
+            printf 'ERROR: action.yml inputs.gitl-version.default="%s" does not match release tag "%s"\n' "$DEFAULT" "$GITHUB_REF_NAME"
             echo 'Update action.yml inputs.gitl-version.default before tagging.'
             exit 1
           fi
@@ -187,4 +204,9 @@ jobs:
             --build-arg GITL_DATE="$(git log -1 --format=%cI)" \
             -t "$IMAGE:$VERSION" -t "$IMAGE:latest" .
           docker push "$IMAGE:$VERSION"
-          docker push "$IMAGE:latest"
+          # :latest is reserved for stable releases — a pre-release tag
+          # (semver with a hyphenated suffix, e.g. v0.5.0-rc1) must not
+          # overwrite it. The versioned tag above is pushed unconditionally.
+          if [[ "$VERSION" != *-* ]]; then
+            docker push "$IMAGE:latest"
+          fi
