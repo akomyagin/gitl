@@ -103,6 +103,10 @@ go install github.com/akomyagin/gitl/cmd/gitl@latest
 # Homebrew (macOS/Linux)
 brew install akomyagin/tap/gitl
 
+# npm — скачивает готовый бинарь под вашу платформу из GitHub Releases
+# и проверяет его SHA256-контрольную сумму (Go-тулчейн не нужен)
+npx gitl-cli review HEAD~5..HEAD   # или: npm install -g gitl-cli
+
 # Либо подписанный релизный бинарь из GitHub Releases (см. VERIFY.md)
 ```
 

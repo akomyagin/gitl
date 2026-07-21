@@ -79,3 +79,47 @@ jobs:
       # runner instead of downloading a pre-compiled binary, avoiding glibc
       # compatibility failures on ubuntu-24.04 runners.
       compile-generator: true
+
+  npm-publish:
+    # The npm wrapper (npm/) has no binaries of its own: its install.js
+    # downloads the release archives + checksums.txt that goreleaser just
+    # uploaded, so publishing only makes sense after that job succeeds.
+    needs: [release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+
+      # package.json carries the placeholder 0.0.0-dev; stamp the tag's version
+      # (without the v prefix) so install.js downloads the matching release.
+      - name: Stamp package version from tag
+        working-directory: npm
+        run: npm version --no-git-tag-version "${GITHUB_REF_NAME#v}"
+
+      # Until the secret is provisioned, skip publishing instead of failing
+      # the release: the binaries are already out by this point.
+      - name: Check NPM_TOKEN configured
+        id: npm_token_check
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "$NPM_TOKEN" ]; then
+            echo "::warning::NPM_TOKEN secret is not set — skipping npm publish. Create it in repo settings (npm automation token) to enable."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish to npm
+        if: steps.npm_token_check.outputs.skip != 'true'
+        working-directory: npm
+        env:
+          # NPM_TOKEN is a repository secret that must be created manually in
+          # GitHub repo settings (an npm automation token with publish rights
+          # for the `gitl-cli` package). It is NOT provisioned by this repo.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish

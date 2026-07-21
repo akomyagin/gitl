@@ -1,0 +1,5 @@
+# Downloaded/extracted release artifacts must never ship inside the npm
+# package (install.js fetches them per platform at install time). Only the JS
+# shim in bin/ is published.
+bin/*
+!bin/gitl.js
