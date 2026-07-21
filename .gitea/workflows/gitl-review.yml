@@ -32,7 +32,7 @@
 #     explicit token via the `github-token` input (from a secret).
 #   * `uses:` is written as a fully-qualified URL so it works regardless of
 #     the instance's DEFAULT_ACTIONS_URL setting (the short form
-#     `akomyagin/gitl@v0.5.0` also works on instances where that setting
+#     `akomyagin/gitl@v0.5.1` also works on instances where that setting
 #     points at github.com, which is the Gitea default).
 
 name: gitl review
@@ -47,7 +47,7 @@ jobs:
         with:
           fetch-depth: 0    # required: without full history base..head won't resolve
 
-      - uses: https://github.com/akomyagin/gitl@v0.5.0
+      - uses: https://github.com/akomyagin/gitl@v0.5.1
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK; omit for offline mode
           # fail-on: high    # optional: block merge on high risk (default: comment only)
