@@ -93,6 +93,11 @@ runs:
         GITL_FAIL_ON: ${{ inputs.fail-on }}
         GITL_MAX_COST_USD: ${{ inputs.max-cost-usd }}
         GITL_PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
+        # Path of THIS action's checkout (not the workspace being reviewed) —
+        # needed to locate ci/comment.sh when the action is consumed as
+        # `uses: akomyagin/gitl@vX`. Passed via env, not interpolated into
+        # the script, per the same rule as the secrets above.
+        GITL_ACTION_PATH: ${{ github.action_path }}
       run: |
         set -euo pipefail
 
@@ -108,28 +113,15 @@ runs:
           --max-cost-usd="$GITL_MAX_COST_USD" \
           > review.json || review_exit=$?
 
-        # Build the PR comment. If review.json is valid JSON, render the full
-        # review. Otherwise gitl itself failed (bad range, provider error,
-        # cost-guard) — post a fallback notice so the PR isn't left silent,
-        # satisfying §12.4.Б's "show reasoning before failing" principle even
-        # on the tool-error path (not only on the risk-gate path).
-        if jq -e . review.json > /dev/null 2>&1; then
-          {
-            echo "<!-- gitl-review -->"
-            echo "## gitl review \`$GITL_RANGE\`"
-            echo
-            jq -r '"**Risk:** " + (.risk.level | ascii_upcase) + " — " + .risk.summary + (if .risk.heuristic then " *(heuristic)*" else "" end)' review.json
-            echo
-            jq -r '.review_markdown' review.json
-          } > comment.md
-        else
-          {
-            echo "<!-- gitl-review -->"
-            echo "## gitl review \`$GITL_RANGE\`"
-            echo
-            echo ":warning: **gitl exited with an error (exit \`${review_exit}\`)** — no review output was produced. Check the [workflow run](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) for details."
-          } > comment.md
-        fi
+        # Build the PR comment (comment.md) from review.json — including the
+        # fallback notice when gitl itself failed. This rendering logic is
+        # platform-neutral and shared with future Gitea/GitLab/Bitbucket
+        # wrappers, so it lives in ci/comment.sh; only the run-URL below is
+        # GitHub-specific, passed in as an opaque GITL_CI_RUN_URL.
+        GITL_RANGE="$GITL_RANGE" \
+        GITL_REVIEW_EXIT="$review_exit" \
+        GITL_CI_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+          bash "${GITL_ACTION_PATH}/ci/comment.sh"
 
         # Post the review BEFORE propagating the risk-gate exit code, so a
         # blocked (high-risk) PR still shows the reasoning, not just a bare
