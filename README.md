@@ -475,6 +475,44 @@ in the YAML):
 > until someone confirms a green run on a real Bitbucket workspace; bug
 > reports welcome.
 
+## MCP server
+
+`gitl mcp` runs gitl as a [Model Context Protocol](https://modelcontextprotocol.io) stdio
+server — a separate, additional channel from the CLI/CI usage above, for using `gitl`
+interactively inside an agent session (Claude Desktop, Cursor, Windsurf, etc.) instead of
+shelling out. It exposes two tools:
+
+- **`gitl_review`** — same review engine as `gitl review`: `range`/`pr`/`staged` (exactly
+  one), optional per-call `provider`/`model`/`base_url` overrides. Always returns the
+  structured JSON artifact (no md/text rendering, no streaming — a tool result is atomic).
+  `risk.level` is returned as data; there is no `--fail-on` in MCP mode since there is no
+  process exit code to gate.
+- **`gitl_digest`** — same as `gitl digest`: `days` (default 7), optional `repos`. Without
+  an explicit `repos` argument the tool only digests the server's working directory (plus
+  `digest.repos` from `.gitl.yaml`, if configured) — it never walks arbitrary paths on its
+  own initiative. An explicit `repos` argument is honored as-is (the calling agent already
+  has filesystem access through its own tools; this isn't an access-control boundary, just
+  a "don't surprise the user" default).
+
+Add to your MCP client config (Claude Desktop, Cursor, etc.):
+
+```json
+{
+  "mcpServers": {
+    "gitl": {
+      "command": "gitl",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
+Config is loaded once at startup the same way as the plain commands (`.gitl.yaml` +
+personal config + `GITL_*` env, from the directory `gitl mcp` is launched in). Without a
+key, tool calls run in the same deterministic offline mode as the CLI. `stdout` is
+reserved for the MCP protocol — nothing human-readable is ever written there; warnings go
+to stderr.
+
 ## License
 
 [MIT](LICENSE).
