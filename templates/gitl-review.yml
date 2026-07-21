@@ -14,7 +14,7 @@
 #   * Directly from GitHub without any catalog, via include:remote (inputs
 #     work with include:remote since GitLab 16.x):
 #         include:
-#           - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.1/templates/gitl-review.yml"
+#           - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.2/templates/gitl-review.yml"
 #             inputs:
 #               fail_on: "high"
 #
@@ -69,7 +69,7 @@ spec:
       default: "0.50"
       description: "Cost guard passed to `gitl review --max-cost-usd`. <=0 disables it."
     gitl_version:
-      default: "v0.5.1"
+      default: "v0.5.2"
       description: >-
         Git ref of akomyagin/gitl to build with `go install` (tag/branch/SHA).
         Defaults to the CLI release this component ships with — override only
