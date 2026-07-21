@@ -22,7 +22,7 @@
 Ollama (локально/self-hosted), Azure OpenAI, нативный Anthropic (Claude),
 Google Gemini. Без телеметрии.
 
-> **Статус:** выпущен `v0.4.2` — все три команды работают на реальных репозиториях,
+> **Статус:** выпущен `v0.4.3` — все три команды работают на реальных репозиториях,
 > все три формата вывода (`md|text|json`); Action оставляет AI-ревью sticky-комментарием
 > к PR и гейтит по риск-скорингу. Релизные бинари кросс-компилированы, подписаны cosign
 > и покрыты SLSA L3 provenance (верификация — в [VERIFY.md](VERIFY.md)).
@@ -269,7 +269,7 @@ jobs:
         with:
           fetch-depth: 0    # обязательно: без полной истории base..head не резолвится
 
-      - uses: akomyagin/gitl@v0.4.2
+      - uses: akomyagin/gitl@v0.4.3
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, см. ниже
           fail-on: high                               # опционально: блокировать мерж при высоком риске
