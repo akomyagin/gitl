@@ -47,6 +47,7 @@ func newRootCmd() *cobra.Command {
 	root.AddCommand(newReviewCmd(gf))
 	root.AddCommand(newChangelogCmd(gf))
 	root.AddCommand(newDigestCmd(gf))
+	root.AddCommand(newMCPCmd(gf))
 
 	return root
 }
