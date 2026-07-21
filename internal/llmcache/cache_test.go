@@ -64,7 +64,11 @@ func TestExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	if err := os.WriteFile(c.path(key), data, 0o600); err != nil {
+	p, err := c.path(key)
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	if err := os.WriteFile(p, data, 0o600); err != nil {
 		t.Fatalf("overwrite: %v", err)
 	}
 
@@ -118,6 +122,23 @@ func TestKeyDifferentModels(t *testing.T) {
 	s, u := "sys", "usr"
 	if Key("openai", "gpt-4o", s, u) == Key("openai", "gpt-4o-mini", s, u) {
 		t.Fatal("keys must differ across models")
+	}
+}
+
+// TestShortKeyReturnsError guards the shard() length check: a key shorter than
+// keyShardLen must produce a clear error from Get/Put, not an
+// out-of-range panic on key[:2]. Key() never produces such a key, so this is
+// purely the defensive path.
+func TestShortKeyReturnsError(t *testing.T) {
+	c := NewInDir(t.TempDir(), time.Hour)
+
+	for _, key := range []string{"", "a"} {
+		if _, ok, err := c.Get(key); err == nil || ok {
+			t.Errorf("Get(%q): expected error, got ok=%v err=%v", key, ok, err)
+		}
+		if err := c.Put(key, sampleResponse()); err == nil {
+			t.Errorf("Put(%q): expected error, got nil", key)
+		}
 	}
 }
 

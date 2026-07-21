@@ -9,10 +9,8 @@ import (
 // fallback error message, so a multi-byte UTF-8 character is never cut in
 // half at the truncation boundary.
 //
-// Used by anthropicErrorMessage and geminiErrorMessage. TODO: client.go's
-// extractErrorMessage has the same byte-index truncation pattern and could
-// reuse this helper — left untouched for now as pre-existing code outside the
-// native-providers change.
+// Used by client.go's extractErrorMessage, anthropicErrorMessage, and
+// geminiErrorMessage.
 func truncateRawBody(body []byte, max int) string {
 	s := strings.TrimSpace(string(body))
 	if len(s) <= max {

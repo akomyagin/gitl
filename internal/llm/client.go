@@ -369,10 +369,5 @@ func extractErrorMessage(body []byte) string {
 	if err := json.Unmarshal(body, &parsed); err == nil && parsed.Error != nil {
 		return parsed.Error.Message
 	}
-	s := strings.TrimSpace(string(body))
-	const max = 200
-	if len(s) > max {
-		return s[:max] + "..."
-	}
-	return s
+	return truncateRawBody(body, 200)
 }

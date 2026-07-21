@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // respondOK writes a minimal OpenAI-shaped success body with the given content.
@@ -371,5 +372,32 @@ func TestClientCompleteRawRetriesThenSucceeds(t *testing.T) {
 	}
 	if n := atomic.LoadInt32(&calls); n != 2 {
 		t.Errorf("expected 2 calls (429 then 200), got %d", n)
+	}
+}
+
+// TestExtractErrorMessage covers both branches: a parsed OpenAI-style error
+// body, and the raw-body fallback — which must be rune-safe at the 200-byte
+// truncation boundary (it now delegates to truncateRawBody instead of a byte
+// slice that could split a multi-byte UTF-8 rune).
+func TestExtractErrorMessage(t *testing.T) {
+	t.Parallel()
+
+	if got := extractErrorMessage([]byte(`{"error":{"message":"bad key","type":"auth"}}`)); got != "bad key" {
+		t.Errorf("parsed error message = %q, want %q", got, "bad key")
+	}
+
+	if got := extractErrorMessage([]byte("  plain failure  ")); got != "plain failure" {
+		t.Errorf("short raw body = %q, want trimmed %q", got, "plain failure")
+	}
+
+	// 199 ASCII bytes then a 2-byte Cyrillic rune straddling byte index 200:
+	// truncation must back off to the rune boundary, never cut it in half.
+	body := strings.Repeat("a", 199) + "ж" + strings.Repeat("б", 50)
+	got := extractErrorMessage([]byte(body))
+	if want := strings.Repeat("a", 199) + "..."; got != want {
+		t.Errorf("mid-rune boundary: got %q, want %q", got, want)
+	}
+	if !utf8.ValidString(got) {
+		t.Errorf("extractErrorMessage produced invalid UTF-8: %q", got)
 	}
 }

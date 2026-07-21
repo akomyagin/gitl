@@ -61,16 +61,38 @@ func Key(provider, model, system, user string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// keyShardLen is the length of the hex prefix used to shard cache entries
+// across subdirectories, keeping any single directory from growing too large.
+const keyShardLen = 2
+
+// shard returns the first keyShardLen characters of key, or an error if key
+// is shorter than that. Key() always returns a 64-char hex SHA-256, so this
+// is unreachable via normal use — a defensive guard against a malformed key
+// reaching path()/Put() some other way.
+func shard(key string) (string, error) {
+	if len(key) < keyShardLen {
+		return "", fmt.Errorf("cache key %q too short to shard (need >= %d chars)", key, keyShardLen)
+	}
+	return key[:keyShardLen], nil
+}
+
 // path returns the sharded on-disk path for a key.
-func (c *Cache) path(key string) string {
-	return filepath.Join(c.dir, key[:2], key+".json")
+func (c *Cache) path(key string) (string, error) {
+	s, err := shard(key)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(c.dir, s, key+".json"), nil
 }
 
 // Get returns the cached response for key. It reports (zero, false, nil) on a
 // miss (including an expired entry, which it best-effort deletes) and
 // (zero, false, err) when an existing entry exists but cannot be read or parsed.
 func (c *Cache) Get(key string) (llm.Response, bool, error) {
-	p := c.path(key)
+	p, err := c.path(key)
+	if err != nil {
+		return llm.Response{}, false, err
+	}
 	data, err := os.ReadFile(p) //nolint:gosec // path derived from a hashed key, not user input
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -103,7 +125,11 @@ func (c *Cache) Get(key string) (llm.Response, bool, error) {
 // directory, writes to a uniquely-named temp file in the same directory, then
 // renames it into place so concurrent writers never observe a partial file.
 func (c *Cache) Put(key string, resp llm.Response) error {
-	subdir := filepath.Join(c.dir, key[:2])
+	s, err := shard(key)
+	if err != nil {
+		return err
+	}
+	subdir := filepath.Join(c.dir, s)
 	if err := os.MkdirAll(subdir, 0o700); err != nil {
 		return fmt.Errorf("create cache dir %q: %w", subdir, err)
 	}

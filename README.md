@@ -229,6 +229,15 @@ Two independent, config-only overrides (there is no CLI flag for either):
   The output template has the render template functions in
   `internal/render/render.go` (`render.TemplateFuncs()`).
 
+> **Trust note:** `prompt.system_template_file`/`output.template_file` can be
+> set by a repo-level `.gitl.yaml`, not just your personal config — so running
+> `gitl review` against a cloned repository you don't control can point it at
+> a template *inside that same repository*. This is the intended mechanism
+> for a team's shared review policy, not a bug: `text/template` here can't
+> read arbitrary files or execute code, but treat an untrusted repo's
+> `.gitl.yaml` with the same caution you'd give its `.git/hooks` or build
+> scripts.
+
 ## GitHub Action
 
 `gitl` can be wired up as a GitHub Action: it AI-reviews a pull request's commits and
