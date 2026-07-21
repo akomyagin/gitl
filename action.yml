@@ -13,9 +13,10 @@ inputs:
     default: ""
   github-token:
     description: >-
-      Token used to post the PR comment via `gh pr comment`. If left empty,
-      falls back to the calling workflow's GITHUB_TOKEN at run time. The
-      workflow must grant it `pull-requests: write`.
+      Token used to post the PR comment (via `gh` on GitHub, via the Gitea
+      REST API on Gitea Actions). If left empty, falls back to the calling
+      workflow's GITHUB_TOKEN at run time. On GitHub the workflow must grant
+      it `pull-requests: write`.
     required: false
     default: ""
   fail-on:
@@ -133,15 +134,70 @@ runs:
         # posting a new one, so force-pushes don't spam the PR thread. The
         # marker is the first line of comment.md, so a startswith() match is
         # enough. GITHUB_REPOSITORY is provided by the runner (owner/repo).
-        EXISTING_ID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments" \
-          --jq '[.[] | select(.body | startswith("<!-- gitl-review -->"))] | last | .id // empty')
+        #
+        # Platform fork: the `gh` CLI only speaks GitHub's API, so on Gitea
+        # Actions the same two operations (find sticky comment, create/edit
+        # it) go through Gitea's REST API with curl instead. Detection is
+        # GITEA_ACTIONS=true, which Gitea's act_runner injects into every job
+        # precisely so actions can tell the platforms apart (act_runner
+        # internal/app/run/runner.go). On GitHub that variable is absent, so
+        # the `gh` branch below is the pre-Gitea behaviour, unchanged apart
+        # from re-indentation into the else-arm.
+        if [ "${GITEA_ACTIONS:-}" = "true" ]; then
+          # Gitea's runner sets GITHUB_API_URL to "<instance>/api/v1"
+          # (gitea/act fork, pkg/runner/run_context.go); fall back to
+          # GITHUB_SERVER_URL if it's unset. If neither is set (e.g. GITEA_ACTIONS
+          # forced by hand outside a real Gitea runner), fail with a clear message
+          # instead of an opaque "unbound variable" abort under `set -u`.
+          if [ -z "${GITHUB_API_URL:-}" ] && [ -z "${GITHUB_SERVER_URL:-}" ]; then
+            echo "::error::GITEA_ACTIONS=true but neither GITHUB_API_URL nor GITHUB_SERVER_URL is set — cannot determine the Gitea API base URL." >&2
+            exit 1
+          fi
+          GITL_API_URL="${GITHUB_API_URL:-${GITHUB_SERVER_URL}/api/v1}"
 
-        if [ -n "$EXISTING_ID" ]; then
-          gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_ID}" \
-            --method PATCH \
-            --field body="$(cat comment.md)"
+          # Gitea API auth header ("Authorization: token <t>",
+          # docs.gitea.com/development/api-usage). The header is fed to curl
+          # on stdin (-H @-), NOT as an argv element: argv is readable by
+          # other processes on the runner host, env+stdin are not. Same
+          # secrets-only-via-env discipline as the rest of this step; the
+          # token never appears in the log either (no set -x, responses of
+          # the mutating calls are discarded).
+          gitea_api() {
+            curl -sSf -H @- -H "Content-Type: application/json" "$@" \
+              <<< "Authorization: token ${GH_TOKEN}"
+          }
+
+          # PRs are issues in Gitea's API, so the PR number is the issue
+          # index. Like the gh branch below, only the first page of comments
+          # is scanned — fine for the sticky marker on real-world PR threads.
+          EXISTING_ID=$(gitea_api \
+            "${GITL_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments" \
+            | jq -r '[.[] | select(.body | startswith("<!-- gitl-review -->"))] | last | .id // empty')
+
+          # JSON-encode the markdown body with jq (raw slurp) — no hand-rolled
+          # escaping of quotes/newlines in the review text.
+          jq -Rs '{body: .}' comment.md > comment.json
+
+          if [ -n "$EXISTING_ID" ]; then
+            gitea_api -X PATCH --data @comment.json \
+              "${GITL_API_URL}/repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_ID}" \
+              > /dev/null
+          else
+            gitea_api -X POST --data @comment.json \
+              "${GITL_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments" \
+              > /dev/null
+          fi
         else
-          gh pr comment "$GITL_PR_NUMBER" --body-file comment.md
+          EXISTING_ID=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments" \
+            --jq '[.[] | select(.body | startswith("<!-- gitl-review -->"))] | last | .id // empty')
+
+          if [ -n "$EXISTING_ID" ]; then
+            gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_ID}" \
+              --method PATCH \
+              --field body="$(cat comment.md)"
+          else
+            gh pr comment "$GITL_PR_NUMBER" --body-file comment.md
+          fi
         fi
 
         exit "$review_exit"

@@ -1,0 +1,53 @@
+# Example Gitea Actions workflow for gitl — copy this file into your own
+# repository as `.gitea/workflows/gitl-review.yml`.
+#
+# Gitea Actions runs the same composite `action.yml` as GitHub Actions; the
+# action detects the platform at run time via the GITEA_ACTIONS=true variable
+# that Gitea's act_runner injects into every job, and posts the sticky PR
+# comment through Gitea's own REST API (the `gh` CLI only works against
+# GitHub and is skipped entirely on Gitea).
+#
+# STATUS / honesty note: this workflow and the Gitea comment-posting path in
+# action.yml were verified against the Gitea, act_runner and gitea/act
+# sources and API docs, but have NOT yet been executed on a real Gitea
+# instance. Treat Gitea support as experimental until then (see README,
+# "Gitea Actions" section).
+#
+# Requirements on your side:
+#   * Gitea >= 1.19 with Actions enabled and a reasonably recent act_runner
+#     registered (new enough to run `using: node24` actions —
+#     actions/checkout@v7 and the actions/setup-go@v6 used inside the gitl
+#     action both declare node24).
+#   * A runner image with bash, git, curl, jq and node (needed by
+#     actions/checkout and actions/setup-go) — e.g. the commonly used
+#     catthehacker/ubuntu:act-latest label mapping.
+#   * The BYOK LLM key stored as a repository/org Actions secret named
+#     GITL_API_KEY (Settings → Actions → Secrets) — never in the YAML.
+#     Without it, gitl runs its deterministic offline review (no network,
+#     no cost), so the workflow is safe to try before wiring a key.
+#
+# Notes vs the GitHub example in README.md:
+#   * No `permissions:` block — the automatic token on Gitea is managed by
+#     the instance; if your instance's token cannot write comments, pass an
+#     explicit token via the `github-token` input (from a secret).
+#   * `uses:` is written as a fully-qualified URL so it works regardless of
+#     the instance's DEFAULT_ACTIONS_URL setting (the short form
+#     `akomyagin/gitl@v0.4.3` also works on instances where that setting
+#     points at github.com, which is the Gitea default).
+
+name: gitl review
+on:
+  pull_request:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@v7
+        with:
+          fetch-depth: 0    # required: without full history base..head won't resolve
+
+      - uses: https://github.com/akomyagin/gitl@v0.4.3
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK; omit for offline mode
+          # fail-on: high    # optional: block merge on high risk (default: comment only)
