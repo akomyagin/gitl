@@ -287,6 +287,53 @@ Security best practices:
 - **Secret masking.** GitHub automatically masks `secrets.*` values in runner logs as
   `***`, but that's not a reason to print the key in your own workflow steps.
 
+## Gitea Actions (experimental)
+
+The same `action.yml` also runs on [Gitea Actions](https://docs.gitea.com/usage/actions/overview) —
+Gitea's runner executes GitHub-style composite actions, and gitl's action detects the
+platform at run time via the `GITEA_ACTIONS=true` variable that Gitea's act_runner
+injects into every job. The only platform-specific part — posting the sticky PR
+comment — then goes through Gitea's REST API
+(`POST`/`PATCH /api/v1/repos/{owner}/{repo}/issues/...`) with `curl` instead of the
+`gh` CLI, which only speaks GitHub's API. GitHub users are unaffected: without
+`GITEA_ACTIONS` the action behaves exactly as before.
+
+Add `.gitea/workflows/gitl-review.yml` to your repository (full commented example:
+[`.gitea/workflows/gitl-review.yml`](.gitea/workflows/gitl-review.yml) in this repo):
+
+```yaml
+name: gitl review
+on:
+  pull_request:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: https://github.com/akomyagin/gitl@v0.4.3
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK; omit for offline mode
+```
+
+Requirements: Actions enabled, a recent act_runner (node24-capable), and a runner
+image providing `bash`, `git`, `curl`, `jq` and node. `GITL_API_KEY` goes into
+Gitea's Actions secrets, never into the YAML — same BYOK rules as on GitHub.
+
+> **Verification status — read before relying on this.** The `curl`-based REST
+> calls (list comments, create, patch, sticky-detection) were run against a real
+> Gitea instance (`gitea/gitea` in Docker) end-to-end — list-empty → POST-create →
+> re-list-finds-it → PATCH-update → still exactly one comment. That part works as
+> written. What's **not yet verified** is the surrounding `act_runner` CI context:
+> whether `GITEA_ACTIONS`/`GITHUB_API_URL`/the PR event payload look exactly as
+> assumed inside a live workflow run (this was cross-checked against Gitea/
+> act_runner/act-fork source, not run inside an actual job). Treat the
+> *CI-triggering* path as experimental until someone confirms a green run
+> end-to-end inside real Gitea Actions; bug reports from real instances are very
+> welcome.
+
 ## License
 
 [MIT](LICENSE).

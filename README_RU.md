@@ -299,6 +299,55 @@ jobs:
   `secrets.*` в логах runner'а как `***`, но это не повод печатать ключ
   в собственных шагах workflow.
 
+## Gitea Actions (экспериментально)
+
+Тот же `action.yml` работает и на [Gitea Actions](https://docs.gitea.com/usage/actions/overview):
+runner Gitea исполняет composite-actions GitHub-формата, а action gitl определяет
+платформу в рантайме по переменной `GITEA_ACTIONS=true`, которую act_runner Gitea
+подставляет в каждый job. Единственная платформо-специфичная часть — постинг
+sticky-комментария — на Gitea идёт через её REST API
+(`POST`/`PATCH /api/v1/repos/{owner}/{repo}/issues/...`) через `curl`, а не через
+`gh` CLI (он умеет только GitHub API). Для пользователей GitHub ничего не
+меняется: без `GITEA_ACTIONS` action ведёт себя ровно как раньше.
+
+Добавьте `.gitea/workflows/gitl-review.yml` в свой репозиторий (полный пример с
+комментариями: [`.gitea/workflows/gitl-review.yml`](.gitea/workflows/gitl-review.yml)
+в этом репо):
+
+```yaml
+name: gitl review
+on:
+  pull_request:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: https://github.com/akomyagin/gitl@v0.4.3
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK; без ключа — offline-режим
+```
+
+Требования: включённые Actions, свежий act_runner (с поддержкой node24) и образ
+runner'а с `bash`, `git`, `curl`, `jq` и node. `GITL_API_KEY` кладётся в
+Actions-секреты Gitea, никогда — в YAML; те же BYOK-правила, что и на GitHub.
+
+> **Статус проверки — прочитайте, прежде чем полагаться.** `curl`-вызовы к REST
+> API (список комментариев, создание, патч, поиск sticky-маркера) прогнаны
+> end-to-end на реальном Gitea-инстансе (`gitea/gitea` в Docker) — пустой
+> список → POST-создание → повторный поиск находит его → PATCH-обновление →
+> по-прежнему ровно один комментарий. Эта часть работает как задумано. Что
+> **ещё не проверено** — окружение самого `act_runner`: совпадают ли
+> `GITEA_ACTIONS`/`GITHUB_API_URL`/структура PR-события внутри реального job'а
+> с тем, что предполагалось (это сверено с исходниками Gitea/act_runner/форка
+> act, но не запускалось внутри настоящего job'а). Считайте именно
+> *CI-триггер* экспериментальным, пока кто-нибудь не подтвердит зелёный прогон
+> end-to-end внутри реального Gitea Actions; баг-репорты с реальных инстансов
+> очень приветствуются.
+
 ## Лицензия
 
 [MIT](LICENSE).
