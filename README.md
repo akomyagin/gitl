@@ -102,8 +102,10 @@ go install github.com/akomyagin/gitl/cmd/gitl@latest
 brew install akomyagin/tap/gitl
 
 # npm — downloads the prebuilt binary for your platform from GitHub Releases
-# and verifies its SHA256 checksum (no Go toolchain needed)
-npx gitl-cli review HEAD~5..HEAD   # or: npm install -g gitl-cli
+# and verifies its SHA256 checksum (no Go toolchain needed).
+# NOTE: not yet published to the npm registry (publish is pending an NPM_TOKEN
+# secret) — use go install / Homebrew / a release binary until it goes live.
+npx gitl-cli review HEAD~5..HEAD   # or: npm install -g gitl-cli (once published)
 
 # Or download a signed release binary from GitHub Releases (see VERIFY.md)
 ```
