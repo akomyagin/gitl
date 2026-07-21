@@ -72,42 +72,15 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			switch {
-			case staged && len(args) > 0:
-				return fmt.Errorf("cannot combine --staged with a revision range or pr/N: --staged reviews the index — pick one")
-			case !staged && len(args) == 0:
-				return fmt.Errorf("provide a revision range (e.g. HEAD~5..HEAD), a PR number (pr/N), or --staged to review staged changes")
+			arg := ""
+			if len(args) > 0 {
+				arg = args[0]
 			}
-
-			ctx := cmd.Context()
-			runner, err := gitlog.NewRunner("")
+			src, err := resolveReviewSource(cmd.Context(), arg, staged)
 			if err != nil {
 				return err
 			}
-
-			var src diffSource
-			switch {
-			case staged:
-				src, err = stagedSource(ctx, runner)
-			default:
-				isPR, prNum, argErr := classifyReviewArg(args[0])
-				if argErr != nil {
-					return argErr
-				}
-				if isPR {
-					resolver, rErr := newPRResolver("")
-					if rErr != nil {
-						return rErr
-					}
-					src, err = prSource(ctx, runner, resolver, prNum)
-				} else {
-					src, err = rangeSource(ctx, runner, args[0])
-				}
-			}
-			if err != nil {
-				return err
-			}
-			return runReview(ctx, cmd, gf, src)
+			return runReview(cmd.Context(), cmd, gf, src)
 		},
 	}
 
@@ -146,6 +119,42 @@ func classifyReviewArg(arg string) (isPR bool, prNum int, err error) {
 		return false, 0, fmt.Errorf("invalid PR number in %q (must be a positive integer)", arg)
 	}
 	return true, n, nil
+}
+
+// resolveReviewSource validates the mutually exclusive review selectors and
+// resolves the diffSource for one review. arg is the range-or-pr/N selector
+// (the positional argument of `gitl review`), empty when absent; staged selects
+// the index instead. Shared by the cobra RunE and the MCP gitl_review handler
+// (mcp.go), so the two entry points can never diverge on mode validation or
+// source construction.
+func resolveReviewSource(ctx context.Context, arg string, staged bool) (diffSource, error) {
+	switch {
+	case staged && arg != "":
+		return diffSource{}, fmt.Errorf("cannot combine --staged with a revision range or pr/N: --staged reviews the index — pick one")
+	case !staged && arg == "":
+		return diffSource{}, fmt.Errorf("provide a revision range (e.g. HEAD~5..HEAD), a PR number (pr/N), or --staged to review staged changes")
+	}
+
+	runner, err := gitlog.NewRunner("")
+	if err != nil {
+		return diffSource{}, err
+	}
+
+	if staged {
+		return stagedSource(ctx, runner)
+	}
+	isPR, prNum, err := classifyReviewArg(arg)
+	if err != nil {
+		return diffSource{}, err
+	}
+	if isPR {
+		resolver, err := newPRResolver("")
+		if err != nil {
+			return diffSource{}, err
+		}
+		return prSource(ctx, runner, resolver, prNum)
+	}
+	return rangeSource(ctx, runner, arg)
 }
 
 // reviewMode discriminates how the diffSource was selected. An explicit field
