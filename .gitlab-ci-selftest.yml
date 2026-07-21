@@ -1,0 +1,46 @@
+# Semi-automated self-test of templates/gitl-review.yml — the GitLab
+# counterpart of .github/workflows/action-selftest.yml (§12.8's
+# "semi-automated" tier): exercise the real component end-to-end — go
+# install, gitl review (offline), comment rendering via ci/comment.sh,
+# sticky-note posting through the GitLab REST API, exit-code propagation —
+# against a merge request, with no API key and no LLM cost.
+#
+# HOW TO RUN — this repository is hosted on GitHub, so this pipeline cannot
+# run here directly. To execute it you need a GitLab mirror of the repo
+# (e.g. a gitlab.com project pull-mirroring github.com/akomyagin/gitl):
+#   1. In the mirror, copy this file to `.gitlab-ci.yml` (or point
+#      Settings → CI/CD → General pipelines → "CI/CD configuration file"
+#      at `.gitlab-ci-selftest.yml`).
+#   2. Define a masked CI/CD variable GITL_GITLAB_TOKEN (project access
+#      token, `api` scope, Reporter+) so the job can post the MR note —
+#      the CI_JOB_TOKEN fallback is expected to be rejected by the Notes
+#      API on most instances (documented fork in templates/gitl-review.yml).
+#   3. Open a merge request in the mirror — the component's rules only
+#      trigger on merge request pipelines.
+#
+# It doubles as the consumer-facing usage example: a real `.gitlab-ci.yml`
+# would look exactly like the include below, with `local:` replaced by
+# `remote:` (or `component:` once published to a CI/CD Catalog):
+#
+#   include:
+#     - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.4.3/templates/gitl-review.yml"
+#       inputs:
+#         fail_on: "never"        # default; set "high" to block risky MRs
+#
+# No gitl_api_key input and no GITL_API_KEY variable here on purpose: gitl's
+# offline mode gives a deterministic review with zero cost and zero network
+# dependency — same choice as action-selftest.yml.
+
+include:
+  - local: "/templates/gitl-review.yml"
+    inputs:
+      fail_on: "never"
+      # Build gitl from the exact commit under test, not the component's
+      # pinned release default — the point of this pipeline is to test
+      # in-progress code, including before its tag exists. Input values are
+      # plain strings, so $CI_COMMIT_SHA is expanded by the runner when the
+      # job executes (it lands in the job's `variables:` mapping). CAVEAT:
+      # `go install` resolves the ref against github.com/akomyagin/gitl, so
+      # the commit must be pushed to GitHub — true for a pull-mirror (its
+      # SHAs come from GitHub), NOT true for commits made only in the mirror.
+      gitl_version: "$CI_COMMIT_SHA"

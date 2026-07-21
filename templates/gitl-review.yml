@@ -1,0 +1,225 @@
+# GitLab CI/CD component: gitl review — AI review of a merge request's commit
+# range with risk scoring and a sticky MR comment. GitLab counterpart of the
+# GitHub/Gitea composite `action.yml` in this repository; the shared,
+# platform-neutral comment rendering lives in `ci/comment.sh` (fetched below
+# at the pinned gitl version), only the MR-comment posting is GitLab-specific.
+#
+# Consumption:
+#   * From the CI/CD Catalog (once this component is published on a GitLab
+#     instance — see the "GitLab CI" section of README.md for status):
+#         include:
+#           - component: <gitlab-host>/<namespace>/gitl/gitl-review@<version>
+#             inputs:
+#               fail_on: "high"
+#   * Directly from GitHub without any catalog, via include:remote (inputs
+#     work with include:remote since GitLab 16.x):
+#         include:
+#           - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.4.3/templates/gitl-review.yml"
+#             inputs:
+#               fail_on: "high"
+#
+# Secrets discipline (docs/TECHNICAL_PLAN.md §12.5):
+#   * The LLM key is read from the GITL_API_KEY CI/CD variable (Settings →
+#     CI/CD → Variables, masked). Because project/group-level variables take
+#     precedence over the job-level `variables:` mapping below, simply
+#     defining GITL_API_KEY there is enough — you don't have to touch the
+#     `gitl_api_key` input at all. If you do use the input, pass a *variable
+#     reference* (e.g. `gitl_api_key: $MY_LLM_KEY`), NEVER a literal key:
+#     input values are interpolated into the pipeline config, which is
+#     visible to anyone who can read the pipeline.
+#   * Without a key, gitl runs its deterministic offline review (no network
+#     call, no cost) — safe to try before wiring any secret.
+#   * The comment-posting token (GITL_GITLAB_TOKEN, see below) is likewise a
+#     CI/CD variable, never YAML. No token or key is ever echoed and the
+#     script never enables `set -x`.
+#
+# Comment-posting token (open fork, documented on purpose):
+#   * Preferred: define a masked CI/CD variable GITL_GITLAB_TOKEN holding a
+#     project access token (or PAT) with `api` scope and at least Reporter
+#     role — the Notes API requires it. Sent as "PRIVATE-TOKEN: <t>".
+#   * Fallback: if GITL_GITLAB_TOKEN is not set, the job falls back to
+#     CI_JOB_TOKEN (sent as "JOB-TOKEN: <t>"). CAVEAT: on most GitLab
+#     versions/configurations CI_JOB_TOKEN is NOT authorized for the MR
+#     Notes API (its endpoint allowlist covers packages/releases/etc., not
+#     notes), so this fallback is expected to fail with 401/403 on many
+#     instances — the job then fails with an explicit message telling you to
+#     set GITL_GITLAB_TOKEN, instead of silently skipping the comment.
+
+spec:
+  inputs:
+    stage:
+      default: "test"
+      description: "Pipeline stage for the review job."
+    gitl_api_key:
+      default: ""
+      description: >-
+        LLM API key (BYOK). Leave empty and define a masked GITL_API_KEY
+        CI/CD variable instead (project variables override this mapping); or
+        pass a variable reference like $MY_LLM_KEY. Never a literal key.
+        Empty everywhere = deterministic offline review (no network, no cost).
+    fail_on:
+      default: "never"
+      options: ["never", "low", "medium", "high"]
+      description: >-
+        Risk threshold that fails the job (never|low|medium|high). Default
+        "never": the job only comments, it does not block merges, unless the
+        caller opts in explicitly (project principle: default WARN, hard gate
+        is explicit opt-in — docs/TECHNICAL_PLAN.md §9/§13).
+    max_cost_usd:
+      default: "0.50"
+      description: "Cost guard passed to `gitl review --max-cost-usd`. <=0 disables it."
+    gitl_version:
+      default: "v0.4.3"
+      description: >-
+        Git ref of akomyagin/gitl to build with `go install` (tag/branch/SHA).
+        Defaults to the CLI release this component ships with — override only
+        for testing (the ref must be reachable on github.com/akomyagin/gitl).
+
+---
+gitl-review:
+  stage: $[[ inputs.stage ]]
+  # go.mod declares `go 1.22`; keep this image in sync with it (same version
+  # the GitHub action pins via actions/setup-go). The official golang image
+  # already ships git + curl and has $GOPATH/bin (/go/bin) on PATH.
+  image: golang:1.22
+  rules:
+    # CI_MERGE_REQUEST_DIFF_BASE_SHA / CI_MERGE_REQUEST_IID only exist in
+    # merge request pipelines, so the job runs only there.
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  variables:
+    # Full clone: the default shallow fetch (GIT_DEPTH 20 on gitlab.com)
+    # cannot resolve CI_MERGE_REQUEST_DIFF_BASE_SHA..CI_COMMIT_SHA for
+    # longer-lived branches — same reason the GitHub example mandates
+    # `fetch-depth: 0`.
+    GIT_DEPTH: "0"
+    # NOTE: a GITL_API_KEY defined in project/group CI/CD settings takes
+    # precedence over this job-level mapping (GitLab variable-precedence
+    # rules), so the empty input default does not mask it.
+    GITL_API_KEY: $[[ inputs.gitl_api_key ]]
+    GITL_FAIL_ON: $[[ inputs.fail_on ]]
+    GITL_MAX_COST_USD: $[[ inputs.max_cost_usd ]]
+    GITL_VERSION: $[[ inputs.gitl_version ]]
+  script:
+    # Secrets (GITL_API_KEY, GITL_GITLAB_TOKEN, CI_JOB_TOKEN) live in env
+    # only: never interpolated into logged command lines, never echoed, and
+    # no `set -x` anywhere in this script (docs/TECHNICAL_PLAN.md §12.5).
+    - set -euo pipefail
+    - |
+      # ---- install gitl at the pinned ref -------------------------------
+      go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"
+
+      # jq is needed by ci/comment.sh and by the sticky-comment logic below;
+      # the golang (Debian) image does not ship it.
+      if ! command -v jq > /dev/null 2>&1; then
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends jq > /dev/null
+      fi
+
+      # The component include only ships this YAML file, not the repository,
+      # so fetch the platform-neutral comment renderer pinned to the SAME
+      # ref as the gitl binary above (works for tags, branches and SHAs).
+      #
+      # Trust note: this is a fetch-and-exec with no integrity check
+      # (checksum/signature) of the downloaded script — accepted for now
+      # because it doesn't widen the trust boundary the job already has via
+      # `go install ...@${GITL_VERSION}` one line above (same repo, same
+      # mutable-tag-by-default ref). Security-conscious consumers should pin
+      # gitl_version to a commit SHA rather than a tag. The real fix —
+      # publishing this component to the GitLab CI/CD Catalog, which ships
+      # repository files with the component instead of fetching them over
+      # the network — removes this fetch entirely and is already planned.
+      curl -sSfL --retry 2 \
+        "https://raw.githubusercontent.com/akomyagin/gitl/${GITL_VERSION}/ci/comment.sh" \
+        -o gitl-comment.sh
+    - |
+      # ---- run the review -----------------------------------------------
+      # Range from GitLab's MR-pipeline predefined variables. Note: in
+      # *merged results* pipelines CI_COMMIT_SHA is the ephemeral merge
+      # commit GitLab creates (it is what's checked out, so the range still
+      # resolves); in regular MR pipelines it is the branch head.
+      GITL_RANGE="${CI_MERGE_REQUEST_DIFF_BASE_SHA}..${CI_COMMIT_SHA}"
+
+      # Single gitl invocation (one LLM call at most, §12.3): --format=json
+      # carries both the review body and the machine risk level, so the
+      # comment and the risk gate share one run.
+      review_exit=0
+      gitl review "$GITL_RANGE" \
+        --format=json \
+        --fail-on="$GITL_FAIL_ON" \
+        --max-cost-usd="$GITL_MAX_COST_USD" \
+        > review.json || review_exit=$?
+
+      # Build comment.md from review.json (including the fallback notice
+      # when gitl itself failed) via the shared renderer; CI_JOB_URL is
+      # GitLab's canonical "link to this job" — the generic GITL_CI_RUN_URL
+      # of the ci/comment.sh contract.
+      GITL_RANGE="$GITL_RANGE" \
+      GITL_REVIEW_EXIT="$review_exit" \
+      GITL_CI_RUN_URL="${CI_JOB_URL}" \
+        bash ./gitl-comment.sh
+
+      # ---- post the sticky MR comment (GitLab REST API) -----------------
+      # Post BEFORE propagating the risk-gate exit code, so a blocked
+      # (high-risk) MR still shows the reasoning, not just a failed job
+      # (§12.4.Б — same "show reasoning before failing" principle as
+      # `gitl review --fail-on` itself).
+      #
+      # Token fork (see header comment): explicit GITL_GITLAB_TOKEN → PAT
+      # header; otherwise CI_JOB_TOKEN → JOB-TOKEN header (often lacks Notes
+      # API permission — expect 401/403 there).
+      if [ -n "${GITL_GITLAB_TOKEN:-}" ]; then
+        AUTH_HEADER="PRIVATE-TOKEN: ${GITL_GITLAB_TOKEN}"
+      elif [ -n "${CI_JOB_TOKEN:-}" ]; then
+        AUTH_HEADER="JOB-TOKEN: ${CI_JOB_TOKEN}"
+      else
+        # CI_JOB_TOKEN is always injected by a real GitLab runner, so this is
+        # only reachable off-runner (manual run, misconfigured self-test) —
+        # fail with a clear message instead of an opaque "unbound variable"
+        # abort under `set -u` (same pattern as the Gitea branch of action.yml).
+        echo "gitl: neither GITL_GITLAB_TOKEN nor CI_JOB_TOKEN is set — cannot authenticate to the GitLab Notes API." >&2
+        exit 1
+      fi
+
+      # The auth header is fed to curl on stdin (-H @-), NOT as an argv
+      # element: argv is readable by other processes on the runner host,
+      # env+stdin are not (same discipline as the Gitea branch of action.yml).
+      gitlab_api() {
+        curl -sSf -H @- -H "Content-Type: application/json" "$@" \
+          <<< "$AUTH_HEADER"
+      }
+
+      NOTES_URL="${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/merge_requests/${CI_MERGE_REQUEST_IID}/notes"
+
+      # Sticky comment: find a previous gitl note by the marker that
+      # ci/comment.sh always puts on the first line, and edit it in place so
+      # force-pushes don't spam the MR thread. Explicit asc sort + `last`
+      # keeps "most recent match wins" semantics regardless of the API's
+      # default ordering; one 100-item page is plenty for the sticky marker
+      # on real-world MR threads (same trade-off as the GitHub/Gitea paths).
+      if ! NOTES_JSON=$(gitlab_api "${NOTES_URL}?order_by=created_at&sort=asc&per_page=100"); then
+        echo "ERROR: could not list MR notes via ${NOTES_URL}." >&2
+        echo "If this job is using the CI_JOB_TOKEN fallback: CI_JOB_TOKEN is usually NOT authorized for the Notes API — define a masked GITL_GITLAB_TOKEN CI/CD variable (project access token, api scope, Reporter+) instead." >&2
+        exit 1
+      fi
+      EXISTING_ID=$(jq -r \
+        '[.[] | select(.body | startswith("<!-- gitl-review -->"))] | last | .id // empty' \
+        <<< "$NOTES_JSON")
+
+      # JSON-encode the markdown body with jq (raw slurp) — no hand-rolled
+      # escaping of quotes/newlines in the review text.
+      jq -Rs '{body: .}' comment.md > comment.json
+
+      post_ok=true
+      if [ -n "$EXISTING_ID" ]; then
+        gitlab_api -X PUT --data @comment.json \
+          "${NOTES_URL}/${EXISTING_ID}" > /dev/null || post_ok=false
+      else
+        gitlab_api -X POST --data @comment.json \
+          "${NOTES_URL}" > /dev/null || post_ok=false
+      fi
+      if [ "$post_ok" != true ]; then
+        echo "ERROR: failed to post the MR comment to ${NOTES_URL}." >&2
+        echo "If this job is using the CI_JOB_TOKEN fallback: CI_JOB_TOKEN is usually NOT authorized for the Notes API — define a masked GITL_GITLAB_TOKEN CI/CD variable (project access token, api scope, Reporter+) instead." >&2
+        exit 1
+      fi
+
+      exit "$review_exit"
