@@ -101,6 +101,10 @@ go install github.com/akomyagin/gitl/cmd/gitl@latest
 # Homebrew (macOS/Linux)
 brew install akomyagin/tap/gitl
 
+# npm — downloads the prebuilt binary for your platform from GitHub Releases
+# and verifies its SHA256 checksum (no Go toolchain needed)
+npx gitl-cli review HEAD~5..HEAD   # or: npm install -g gitl-cli
+
 # Or download a signed release binary from GitHub Releases (see VERIFY.md)
 ```
 
@@ -227,7 +231,8 @@ Two independent, config-only overrides (there is no CLI flag for either):
 
 `gitl` can be wired up as a GitHub Action: it AI-reviews a pull request's commits and
 posts a comment with the risk score, optionally blocking merge above a threshold. The
-Action builds `gitl` from source (`go install` at a pinned version).
+Action builds `gitl` from source (`go install` at a pinned version). Also listed on the
+[GitHub Marketplace](https://github.com/akomyagin/gitl) if you'd rather add it from there.
 
 Add `.github/workflows/gitl-review.yml` to your repository:
 

@@ -1,0 +1,29 @@
+{
+  "name": "gitl-cli",
+  "version": "0.0.0-dev",
+  "description": "AI review of git commits with risk scoring, changelogs, and multi-repo digests. npm wrapper that downloads the prebuilt gitl Go binary from GitHub Releases.",
+  "bin": {
+    "gitl": "bin/gitl.js"
+  },
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/akomyagin/gitl.git"
+  },
+  "homepage": "https://github.com/akomyagin/gitl",
+  "bugs": {
+    "url": "https://github.com/akomyagin/gitl/issues"
+  },
+  "keywords": [
+    "git",
+    "ai",
+    "code-review",
+    "changelog",
+    "cli",
+    "llm"
+  ],
+  "author": "Alexander Komyagin",
+  "license": "MIT"
+}
