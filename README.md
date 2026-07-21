@@ -21,7 +21,7 @@ storage. **BYOK** (bring your own key) with multi-provider support: OpenAI-compa
 Ollama (local/self-hosted), Azure OpenAI, native Anthropic (Claude), Google Gemini.
 No telemetry.
 
-> **Status:** `v0.4.3` released — all three commands work on real repositories with all
+> **Status:** `v0.5.0` released — all three commands work on real repositories with all
 > three output formats (`md|text|json`). The Action posts AI reviews as sticky PR comments
 > and gates on risk score. Release binaries are cross-compiled, cosign-signed, and covered
 > by SLSA L3 build provenance (see [VERIFY.md](VERIFY.md)).
@@ -262,7 +262,7 @@ jobs:
         with:
           fetch-depth: 0    # required: without full history base..head won't resolve
 
-      - uses: akomyagin/gitl@v0.4.3
+      - uses: akomyagin/gitl@v0.5.0
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, see below
           fail-on: high                               # optional: block merge on high risk
@@ -313,7 +313,7 @@ jobs:
       - uses: https://github.com/actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: https://github.com/akomyagin/gitl@v0.4.3
+      - uses: https://github.com/akomyagin/gitl@v0.5.0
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK; omit for offline mode
 ```
@@ -350,11 +350,11 @@ yet — consume it via `include:remote` (inputs work with remote includes):
 ```yaml
 # .gitlab-ci.yml
 include:
-  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.4.3/templates/gitl-review.yml"
+  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.0/templates/gitl-review.yml"
     inputs:
       fail_on: "never"      # default; set "high" to block risky MRs
       # max_cost_usd: "0.50"
-      # gitl_version: "v0.4.3"
+      # gitl_version: "v0.5.0"
 ```
 
 Setup — two CI/CD variables (Settings → CI/CD → Variables, both **masked**, never
@@ -417,7 +417,7 @@ platforms). Variables reference: [`bitbucket-pipe/pipe.yml`](bitbucket-pipe/pipe
 > `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets are provisioned (same
 > graceful-skip pattern as npm). Until then, build it yourself from the
 > repository root:
-> `docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:0.4.3 .`
+> `docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:0.5.0 .`
 > and push it to a registry your pipeline can pull from.
 
 ```yaml
@@ -430,7 +430,7 @@ pipelines:
           clone:
             depth: full   # the default depth-50 clone may not contain the PR base commit
           script:
-            - pipe: docker://akomyagin/gitl-review-pipe:0.4.3
+            - pipe: docker://akomyagin/gitl-review-pipe:0.5.0
               variables:
                 GITL_API_KEY: $GITL_API_KEY                    # BYOK; omit for offline review
                 GITL_BITBUCKET_TOKEN: $GITL_BITBUCKET_TOKEN    # posts the PR comment

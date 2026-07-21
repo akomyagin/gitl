@@ -14,10 +14,10 @@
 # NOTE: the image is not published to Docker Hub yet (the release workflow
 # skips the push until DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets are
 # provisioned) — until then, build it locally from the repository root:
-#   docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:0.4.3 .
+#   docker build -f bitbucket-pipe/Dockerfile -t akomyagin/gitl-review-pipe:0.5.0 .
 
 name: gitl review
-image: akomyagin/gitl-review-pipe:0.4.3
+image: akomyagin/gitl-review-pipe:0.5.0
 category: Code quality
 description: >-
   AI review of a pull request's commit range with risk scoring
