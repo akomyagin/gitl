@@ -161,11 +161,11 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 	// --dry-run: print the estimate, no network call, exit 0.
 	dryRun, _ := cmd.Flags().GetBool("dry-run")
 	if dryRun {
-		return true, printDryRun(cmd, cfg, system+"\n"+user)
+		return true, printDryRun(cmd.OutOrStdout(), cmd.ErrOrStderr(), cfg, system+"\n"+user)
 	}
 
 	// Cost guard runs automatically before calling the provider (§8.4).
-	if err := costGuard(cmd, cfg, system+"\n"+user); err != nil {
+	if err := costGuard(cmd.ErrOrStderr(), cfg, system+"\n"+user); err != nil {
 		return true, err
 	}
 

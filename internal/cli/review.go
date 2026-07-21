@@ -17,8 +17,6 @@ import (
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/gitlog"
 	"github.com/akomyagin/gitl/internal/llm"
-	"github.com/akomyagin/gitl/internal/llmcache"
-	"github.com/akomyagin/gitl/internal/prompt"
 	"github.com/akomyagin/gitl/internal/render"
 )
 
@@ -268,9 +266,11 @@ func prSource(ctx context.Context, runner *gitlog.Runner, resolver PRResolver, p
 	return diffSource{Commits: commits, Diff: diff, Label: label, Mode: modePR}, nil
 }
 
-// runReview executes the full review pipeline for one resolved diffSource
-// (range, staged index, or PR — the source constructors have already done the
-// per-mode collection and validation).
+// runReview is the cobra adapter around the cmd-free review core: it parses
+// the review flags, then composes the same building blocks RunReviewCore uses
+// (prepareReview → cache lookup → cost guard → provider → complete), adding
+// the CLI-only concerns on top — --dry-run, terminal token streaming, rendering
+// to stdout, and the --fail-on exit-code gate (see review_core.go).
 func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src diffSource) error {
 	cfg, err := loadConfig(cmd, gf)
 	if err != nil {
@@ -280,129 +280,58 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	if err != nil {
 		return err
 	}
+	noCache, _ := cmd.Flags().GetBool("no-cache")
 
-	commits := src.Commits
+	out := cmd.OutOrStdout()
+	errOut := cmd.ErrOrStderr()
 
-	// Config-driven diff shaping: drop excluded files, then truncate to
-	// max_diff_bytes with an explicit marker (§6).
-	excludeGlobs := mergedExcludeGlobs(cfg)
-	diff := filterDiffByGlobs(src.Diff, excludeGlobs)
-	diff = truncateDiff(diff, cfg.Diff.MaxDiffBytes)
-	// Post-shaping emptiness check for the non-range modes (staged, pr/N):
-	// their whole point is the diff, so an all-excluded diff is a clear user
-	// error, not a silent empty review. Dispatch on the explicit Mode, never
-	// on the label — a range over a branch literally named pr/5 must keep
-	// range semantics.
-	if strings.TrimSpace(diff) == "" {
-		switch src.Mode {
-		case modeStaged:
-			return fmt.Errorf("no staged changes to review: all staged files are excluded by exclude_globs")
-		case modePR:
-			return fmt.Errorf("no reviewable changes in %s: the PR diff is empty or all files are excluded by exclude_globs", src.Label)
-		case modeRange:
-			// Historical behavior: commit metadata alone can be worth reviewing.
-		}
-	}
-
-	// Custom prompt templates apply only when calling a real provider; the
-	// offline provider ignores the system prompt, so pass an empty path in
-	// offline mode to keep behavior deterministic.
-	systemTemplateFile := cfg.Prompt.SystemTemplateFile
-	if cfg.OfflineMode() {
-		systemTemplateFile = ""
-	}
-	system, user, err := prompt.BuildReviewWithTemplate(prompt.Review{
-		Range:   src.Label,
-		Commits: commits,
-		Diff:    diff,
-		Staged:  src.Staged,
-	}, systemTemplateFile)
+	plan, err := prepareReview(cfg, src, ReviewOptions{NoCache: noCache})
 	if err != nil {
-		return fmt.Errorf("prompt template: %w", err)
+		return err
 	}
 
 	// LLM response cache (Item 5): serve an equivalent prior review without a
-	// network call. Only active for network reviews — offline mode is already
-	// deterministic and free, so it is never cached.
-	// The key hashes provider+model+system+user, and the user message embeds
-	// the full diff — so staged mode is content-addressed by the staged diff
-	// itself (no range exists to key on): re-running with the same index hits
-	// the cache, any `git add` changes the diff and therefore the key.
-	noCache, _ := cmd.Flags().GetBool("no-cache")
-	useCache := cfg.Cache.Enabled && !noCache && !cfg.OfflineMode() && cfg.Cache.TTLHours > 0
-	var (
-		cache    *llmcache.Cache
-		cacheKey string
-	)
-	if useCache {
-		if c, err := llmcache.New(time.Duration(cfg.Cache.TTLHours) * time.Hour); err == nil {
-			cache = c
-			cacheKey = llmcache.Key(cfg.LLM.Provider, cfg.LLM.Model, system, user)
-			if resp, ok, _ := cache.Get(cacheKey); ok {
-				slog.Debug("llm cache hit", "key", cacheKey[:12])
-				art := buildArtifact(cfg, src.Label, commits, diff, resp)
-				if err := render.RenderWithTemplate(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
-					return err
-				}
-				threshold := cfg.Policy.FailOn
-				if threshold != "" && threshold != "never" && llm.RiskAtLeast(resp.Risk.Level, threshold) {
-					return &failError{level: resp.Risk.Level, threshold: threshold}
-				}
-				return nil
-			}
-		} else {
-			slog.Debug("llm cache unavailable", "err", err)
+	// network call. Checked before --dry-run, preserving the historical order:
+	// a warm cache renders the cached review even under --dry-run.
+	if art, ok := plan.lookupCache(); ok {
+		if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
+			return err
 		}
+		return gateFailOn(cfg, art.RiskLevel)
 	}
 
 	// --dry-run: print the estimate, no network call, exit 0.
 	if dryRun {
-		return printDryRun(cmd, cfg, system+"\n"+user)
+		return printDryRun(out, errOut, cfg, plan.promptText())
 	}
 
 	// Cost guard runs automatically before calling the provider (§8.4), skipped
 	// in offline mode (no call, no cost).
 	if !cfg.OfflineMode() {
-		if err := costGuard(cmd, cfg, system+"\n"+user); err != nil {
+		if err := costGuard(errOut, cfg, plan.promptText()); err != nil {
 			return err
 		}
 	}
 
-	provider, err := selectProvider(cmd, cfg, commits, diff)
+	provider, err := selectProvider(errOut, cfg, src.Commits, plan.diff)
 	if err != nil {
 		return err
 	}
 
 	// Streaming branch (Item 1): stream tokens to a terminal for md/text output.
-	// The body is written directly by Stream; only the risk header is appended
-	// afterward, so the full Artifact renderer is NOT invoked here.
+	// A CLI-only concern — the core always works buffered. The body is written
+	// directly by Stream; only the risk header is appended afterward, so the
+	// full Artifact renderer is NOT invoked here.
 	// If Stream fails before writing any bytes (e.g. 429/503 before the first
-	// token), we fall through to the buffered Complete path below (§7.2/§8).
+	// token), we fall through to the buffered complete path below (§7.2/§8).
 	if s, ok := provider.(llm.Streamer); ok && wantStream(cmd, cfg) {
-		out := cmd.OutOrStdout()
 		cw := &byteCountWriter{w: out}
-		resp, streamErr := s.Stream(ctx, llm.Request{
-			System:      system,
-			User:        user,
-			Model:       cfg.LLM.Model,
-			MaxTokens:   cfg.LLM.MaxTokens,
-			Temperature: cfg.LLM.Temperature,
-			Commits:     commits,
-			Diff:        diff,
-		}, cw)
+		resp, streamErr := s.Stream(ctx, plan.request(), cw)
 		if streamErr == nil {
 			// Risk header printed after [DONE] — body already written by Stream.
 			fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLine(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic))
-			if cache != nil && cacheKey != "" {
-				if err := cache.Put(cacheKey, resp); err != nil {
-					slog.Debug("llm cache put failed", "err", err)
-				}
-			}
-			threshold := cfg.Policy.FailOn
-			if threshold != "" && threshold != "never" && llm.RiskAtLeast(resp.Risk.Level, threshold) {
-				return &failError{level: resp.Risk.Level, threshold: threshold}
-			}
-			return nil
+			plan.storeCache(resp)
+			return gateFailOn(cfg, resp.Risk.Level)
 		}
 		if cw.written > 0 {
 			// Tokens already reached the terminal — partial output can't be undone.
@@ -412,37 +341,16 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 		slog.Info("streaming failed before first token, falling back to non-streaming", "err", streamErr)
 	}
 
-	slog.Debug("requesting review", "commits", len(commits), "diff_bytes", len(diff), "offline", cfg.OfflineMode())
-	resp, err := provider.Complete(ctx, llm.Request{
-		System:      system,
-		User:        user,
-		Model:       cfg.LLM.Model,
-		MaxTokens:   cfg.LLM.MaxTokens,
-		Temperature: cfg.LLM.Temperature,
-		Commits:     commits,
-		Diff:        diff,
-	})
+	art, err := plan.complete(ctx, provider)
 	if err != nil {
-		return fmt.Errorf("review failed: %w", err)
+		return err
 	}
-
-	if cache != nil && cacheKey != "" {
-		if err := cache.Put(cacheKey, resp); err != nil {
-			slog.Debug("llm cache put failed", "err", err)
-		}
-	}
-
-	art := buildArtifact(cfg, src.Label, commits, diff, resp)
-	if err := render.RenderWithTemplate(cmd.OutOrStdout(), art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
+	if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
 		return err
 	}
 
 	// Gate LAST, only after the review has been printed (§9).
-	threshold := cfg.Policy.FailOn
-	if threshold != "" && threshold != "never" && llm.RiskAtLeast(resp.Risk.Level, threshold) {
-		return &failError{level: resp.Risk.Level, threshold: threshold}
-	}
-	return nil
+	return gateFailOn(cfg, art.RiskLevel)
 }
 
 // buildArtifact assembles the render artifact from the review inputs and the
@@ -484,11 +392,11 @@ func buildArtifact(cfg *config.Config, revRange string, commits []gitlog.Commit,
 }
 
 // selectProvider returns the network client when an API key is configured, or
-// the deterministic offline provider otherwise (printing a warning to stderr,
-// not failing).
-func selectProvider(cmd *cobra.Command, cfg *config.Config, commits []gitlog.Commit, diff string) (llm.Provider, error) {
+// the deterministic offline provider otherwise (printing a warning to errOut —
+// the CLI's stderr — not failing).
+func selectProvider(errOut io.Writer, cfg *config.Config, commits []gitlog.Commit, diff string) (llm.Provider, error) {
 	if cfg.OfflineMode() {
-		fmt.Fprintln(cmd.ErrOrStderr(), "gitl: no LLM API key configured — using deterministic offline review (set GITL_API_KEY for an AI review).")
+		fmt.Fprintln(errOut, "gitl: no LLM API key configured — using deterministic offline review (set GITL_API_KEY for an AI review).")
 		return llm.NewOffline(commits, diff), nil
 	}
 	return newNetworkClient(cfg)

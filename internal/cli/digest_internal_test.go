@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/gitlog"
 )
@@ -58,24 +56,18 @@ func TestBuildDigestArtifactUntilIsDeterministic(t *testing.T) {
 	}
 }
 
-// newDigestReposTestCmd builds a minimal command carrying the --repos flag
-// (unset), so resolveDigestRepos falls through to the digest.repos config branch.
-func newDigestReposTestCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "digest"}
-	cmd.Flags().String("repos", "", "")
-	return cmd
-}
-
 // TestResolveDigestReposConfigSkipsEmptyPaths: an empty/whitespace path entry in
 // digest.repos must be skipped, not silently included as "" (previously "" was
-// absolutized to the CWD-relative path and passed to CollectDigests).
+// absolutized to the CWD-relative path and passed to CollectDigests). No
+// explicit paths are passed, so digestRepoPaths falls through to the
+// digest.repos config branch.
 func TestResolveDigestReposConfigSkipsEmptyPaths(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Digest.Repos = []config.RepoRef{{Path: ""}, {Path: "/repo/a"}}
 
-	paths, err := resolveDigestRepos(newDigestReposTestCmd(), cfg)
+	paths, err := digestRepoPaths(cfg, nil)
 	if err != nil {
-		t.Fatalf("resolveDigestRepos: %v", err)
+		t.Fatalf("digestRepoPaths: %v", err)
 	}
 	if len(paths) != 1 || paths[0] != "/repo/a" {
 		t.Fatalf("paths = %v, want exactly [/repo/a]", paths)
@@ -83,14 +75,14 @@ func TestResolveDigestReposConfigSkipsEmptyPaths(t *testing.T) {
 }
 
 // TestResolveDigestReposConfigAllEmptyIsError: when every digest.repos entry has
-// an empty path, resolveDigestRepos must return an explicit error — not an empty
+// an empty path, digestRepoPaths must return an explicit error — not an empty
 // slice (which would make CollectDigests silently digest zero repositories) and
 // not the single-repo "." fallback.
 func TestResolveDigestReposConfigAllEmptyIsError(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Digest.Repos = []config.RepoRef{{Path: ""}, {Path: "   "}}
 
-	paths, err := resolveDigestRepos(newDigestReposTestCmd(), cfg)
+	paths, err := digestRepoPaths(cfg, nil)
 	if err == nil {
 		t.Fatalf("expected error, got paths %v", paths)
 	}

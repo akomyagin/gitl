@@ -2,8 +2,7 @@ package cli
 
 import (
 	"fmt"
-
-	"github.com/spf13/cobra"
+	"io"
 
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/llm"
@@ -11,10 +10,11 @@ import (
 
 // resolvePricing determines the pricing for the configured model (§8.2):
 // config override wins unconditionally; otherwise the built-in table; ollama is
-// always free ($0). ok is false (and a warning is printed) when the model is
-// not in the table and no override is set — the caller then skips the guard
-// permissively.
-func resolvePricing(cmd *cobra.Command, cfg *config.Config) (pricing llm.Pricing, ok bool) {
+// always free ($0). ok is false (and a warning is printed to errOut) when the
+// model is not in the table and no override is set — the caller then skips the
+// guard permissively. errOut is the CLI's stderr; cmd-free callers pass their
+// own sink.
+func resolvePricing(errOut io.Writer, cfg *config.Config) (pricing llm.Pricing, ok bool) {
 	// Ollama is self-hosted: always free, guard/estimate skipped without a
 	// warning (the expected free path).
 	if cfg.LLM.Provider == llm.ProviderOllama {
@@ -34,7 +34,7 @@ func resolvePricing(cmd *cobra.Command, cfg *config.Config) (pricing llm.Pricing
 		return p, true
 	}
 
-	fmt.Fprintf(cmd.ErrOrStderr(),
+	fmt.Fprintf(errOut,
 		"gitl: no pricing data for model %q — cost estimate unavailable, proceeding without cost-guard (set cost.price_per_1m_input/output to enable it)\n",
 		cfg.LLM.Model)
 	return llm.Pricing{}, false
@@ -47,10 +47,9 @@ func estimateFor(cfg *config.Config, promptText string, pricing llm.Pricing) llm
 	return est
 }
 
-// printDryRun prints a cost estimate to stdout and returns nil (exit 0), making
-// no network call (§8.3).
-func printDryRun(cmd *cobra.Command, cfg *config.Config, promptText string) error {
-	out := cmd.OutOrStdout()
+// printDryRun prints a cost estimate to out (the CLI's stdout) and returns nil
+// (exit 0), making no network call (§8.3). Warnings go to errOut.
+func printDryRun(out, errOut io.Writer, cfg *config.Config, promptText string) error {
 	if cfg.OfflineMode() {
 		fmt.Fprintln(out, "offline mode — no API call, no cost")
 		return nil
@@ -61,7 +60,7 @@ func printDryRun(cmd *cobra.Command, cfg *config.Config, promptText string) erro
 		return nil
 	}
 
-	pricing, ok := resolvePricing(cmd, cfg)
+	pricing, ok := resolvePricing(errOut, cfg)
 	if !ok {
 		fmt.Fprintf(out, "estimate unavailable: no pricing data for model %q (estimate, not exact)\n", cfg.LLM.Model)
 		return nil
@@ -79,11 +78,11 @@ func printDryRun(cmd *cobra.Command, cfg *config.Config, promptText string) erro
 
 // costGuard estimates the cost of the request and enforces cost.max_cost_usd
 // (§8.4). It runs before the provider call. A non-positive max_cost_usd disables
-// the guard; between warn_at_usd and max_cost_usd it only warns. Returns a
-// non-nil error (non-zero exit) when the estimate exceeds the limit.
-func costGuard(cmd *cobra.Command, cfg *config.Config, promptText string) error {
+// the guard; between warn_at_usd and max_cost_usd it only warns (to errOut).
+// Returns a non-nil error (non-zero exit) when the estimate exceeds the limit.
+func costGuard(errOut io.Writer, cfg *config.Config, promptText string) error {
 	// Ollama / unknown-pricing paths are free/permissive.
-	pricing, ok := resolvePricing(cmd, cfg)
+	pricing, ok := resolvePricing(errOut, cfg)
 	if !ok || cfg.LLM.Provider == llm.ProviderOllama {
 		return nil
 	}
@@ -103,7 +102,7 @@ func costGuard(cmd *cobra.Command, cfg *config.Config, promptText string) error 
 	}
 
 	if cfg.Cost.WarnAtUSD > 0 && est.CostUSD > cfg.Cost.WarnAtUSD {
-		fmt.Fprintf(cmd.ErrOrStderr(),
+		fmt.Fprintf(errOut,
 			"gitl: estimated cost %s approaches the limit --max-cost-usd=%g (warn_at=%g) — proceeding\n",
 			est.String(), maxCost, cfg.Cost.WarnAtUSD)
 	}
