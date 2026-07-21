@@ -257,3 +257,56 @@ jobs:
           set -euo pipefail
           git push "$GITLAB_MIRROR_URL" "HEAD:refs/heads/master" --force
           git push "$GITLAB_MIRROR_URL" "refs/tags/${GITHUB_REF_NAME}"
+
+      # The CI/CD Catalog lists a project's Releases, not its tags — pushing
+      # the tag above is necessary but not sufficient. This creates the
+      # matching GitLab Release via the API so every tagged version shows up
+      # in the Catalog automatically (previously a manual one-off step).
+      - name: Create GitLab Release
+        if: steps.mirror_check.outputs.skip != 'true'
+        env:
+          # Same discipline as the push step above: the token is parsed out of
+          # the URL via pure bash parameter expansion (no subprocess ever sees
+          # it as an argv element) and fed to curl on stdin (-H @-), never on
+          # curl's own argv or echoed.
+          GITLAB_MIRROR_URL: ${{ secrets.GITLAB_MIRROR_URL }}
+        run: |
+          set -euo pipefail
+          rest="${GITLAB_MIRROR_URL#*://oauth2:}"
+          token="${rest%%@*}"
+          host_and_path="${rest#*@}"
+          api_host="${host_and_path%%/*}"
+          project_path="${host_and_path#*/}"
+          project_path="${project_path%.git}"
+          encoded_path=$(jq -rn --arg p "$project_path" '$p | @uri')
+
+          # %(contents) on a lightweight tag falls back to the target commit's
+          # message (misleading as a "release description") — only use it for
+          # a real annotated tag (objecttype=tag); an empty description is
+          # fine, GitLab accepts it.
+          description=""
+          if [ "$(git for-each-ref --format='%(objecttype)' "refs/tags/${GITHUB_REF_NAME}")" = "tag" ]; then
+            description="$(git tag -l --format='%(contents)' "$GITHUB_REF_NAME")"
+          fi
+          payload=$(jq -n --arg tag "$GITHUB_REF_NAME" --arg desc "$description" \
+            '{tag_name: $tag, name: $tag, description: $desc}')
+
+          http_code=$(curl -sS -o /tmp/gitlab-release-response.json -w '%{http_code}' \
+            -X POST \
+            -H @- \
+            -H 'Content-Type: application/json' \
+            --data "$payload" \
+            "https://${api_host}/api/v4/projects/${encoded_path}/releases" \
+            <<< "PRIVATE-TOKEN: ${token}")
+
+          if [ "$http_code" = "201" ]; then
+            echo "OK: created GitLab Release ${GITHUB_REF_NAME}"
+          elif [ "$http_code" = "409" ]; then
+            # A Release for this tag already exists (e.g. a manually-triggered
+            # re-run of this job) — not a failure.
+            echo "OK: GitLab Release ${GITHUB_REF_NAME} already exists — nothing to do"
+          else
+            echo "::error::GitLab Releases API returned HTTP ${http_code}"
+            cat /tmp/gitlab-release-response.json
+            exit 1
+          fi
