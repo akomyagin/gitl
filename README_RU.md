@@ -9,7 +9,8 @@
   (`low|medium|high`) для гейтинга в CI (`--fail-on=high` → ненулевой exit code);
   стримит токены в терминал в реальном времени; дисковый кэш LLM-ответов;
   кастомные системные шаблоны промптов; `--staged` — ревью staged (ещё не
-  закоммиченных) изменений перед `git commit`.
+  закоммиченных) изменений перед `git commit` (доступно и как
+  [pre-commit-хук](#pre-commit-хук-локально)).
 - **`gitl changelog [<range>]`** — changelog в стиле Keep a Changelog, группировка
   по conventional-commits (по умолчанию — диапазон от последнего тега до `HEAD`);
   детерминированный по умолчанию, `--ai` опционально переписывает его моделью
@@ -551,6 +552,64 @@ Pipelines → Repository variables; всегда ссылкой `$VAR`, нико
 > pipe'ов. Считайте именно *live-пайплайн-путь* экспериментальным, пока
 > кто-нибудь не подтвердит зелёный прогон на реальном Bitbucket-workspace;
 > баг-репорты приветствуются.
+
+## Pre-commit хук (локально)
+
+`gitl` поставляет хук для фреймворка [pre-commit](https://pre-commit.com/), чтобы
+`gitl review --staged` запускался автоматически перед каждым коммитом — локально,
+в офлайн-режиме и без затрат по умолчанию.
+
+Добавьте в `.pre-commit-config.yaml` вашего репозитория:
+
+```yaml
+repos:
+  - repo: https://github.com/akomyagin/gitl
+    rev: v0.5.2   # pin to a released tag
+    hooks:
+      - id: gitl-review
+```
+
+затем выполните `pre-commit install`. Фреймворк сам собирает бинарь `gitl`
+(`language: golang`) и кэширует окружение в `~/.cache/pre-commit/`, так что
+стоимость сборки платится один раз, а не на каждый коммит.
+
+Opt-in блокирующего режима с лимитом стоимости:
+
+```yaml
+hooks:
+  - id: gitl-review
+    args: [--fail-on=high, --max-cost-usd=0.05]   # opt-in: block on high risk, cap cost
+```
+
+Экспортируйте `GITL_API_KEY` в окружении для настоящего AI-ревью; без него хук
+выполняет детерминированное offline-ревью (без сети и затрат).
+
+Что важно знать:
+
+- **Офлайн по умолчанию.** Без API-ключа, без сети, без затрат на каждый коммит.
+  Задайте `GITL_API_KEY`, чтобы включить настоящее AI-ревью.
+- **По умолчанию не блокирует коммит.** Хук печатает ревью, но не заваливает
+  коммит — тот же принцип «WARN по умолчанию, жёсткий гейт — явный opt-in», что
+  у CLI/Action. Чтобы блокировать, добавьте `args: [--fail-on=high]`.
+- **Задержка.** Ревью через реальный API занимает несколько секунд; держите его
+  вне горячего пути, оставив офлайн-режим, или ограничьте через `--max-cost-usd`.
+- **Приватность диффа.** С реальным ключом staged-дифф уходит настроенному
+  LLM-провайдеру — для приватного кода используйте self-hosted/enterprise-провайдера
+  (Ollama, Azure OpenAI), см. раздел «Провайдеры» выше.
+
+### Без фреймворка pre-commit
+
+Обычный git-хук тоже работает:
+
+```bash
+# .git/hooks/pre-commit  (chmod +x)
+#!/usr/bin/env bash
+set -euo pipefail
+# Offline, non-blocking review of staged changes (WARN by default).
+gitl review --staged || true
+# To block the commit on high risk instead, replace the line above with:
+#   gitl review --staged --fail-on=high
+```
 
 ## MCP-сервер
 

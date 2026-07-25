@@ -1,0 +1,11 @@
+# pre-commit framework hook manifest (https://pre-commit.com/).
+# Consumers reference this repo from their own .pre-commit-config.yaml — see README.
+- id: gitl-review
+  name: gitl review (staged changes)
+  description: AI review of staged changes before commit (offline by default — no API key, no network, no cost; set GITL_API_KEY for a real AI review).
+  entry: gitl review --staged
+  language: golang
+  pass_filenames: false
+  always_run: true
+  stages: [pre-commit]
+  verbose: true

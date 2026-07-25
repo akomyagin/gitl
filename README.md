@@ -9,7 +9,7 @@ repository's git history and turns it into a structured engineering artifact via
   risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → non-zero exit code);
   streams tokens to the terminal in real time; on-disk LLM response cache;
   custom system-prompt templates; `--staged` reviews staged (uncommitted) changes
-  before `git commit`.
+  before `git commit` (also available as a [pre-commit hook](#pre-commit-hook-local)).
 - **`gitl changelog [<range>]`** — Keep a Changelog-style changelog, grouped by
   conventional commits (defaults to last tag → `HEAD`); deterministic by default,
   `--ai` optionally rewrites it with the model as readable release-note prose;
@@ -531,6 +531,64 @@ in the YAML):
 > clone into pipe containers. Treat the *live pipeline* path as experimental
 > until someone confirms a green run on a real Bitbucket workspace; bug
 > reports welcome.
+
+## Pre-commit hook (local)
+
+`gitl` ships a [pre-commit](https://pre-commit.com/) framework hook so that
+`gitl review --staged` runs automatically before every commit — locally, offline,
+and at zero cost by default.
+
+Add to your repository's `.pre-commit-config.yaml`:
+
+```yaml
+repos:
+  - repo: https://github.com/akomyagin/gitl
+    rev: v0.5.2   # pin to a released tag
+    hooks:
+      - id: gitl-review
+```
+
+then run `pre-commit install`. The framework builds the `gitl` binary itself
+(`language: golang`) and caches the environment under `~/.cache/pre-commit/`, so
+the build cost is paid once, not on every commit.
+
+To opt into a blocking hook with a cost cap:
+
+```yaml
+hooks:
+  - id: gitl-review
+    args: [--fail-on=high, --max-cost-usd=0.05]   # opt-in: block on high risk, cap cost
+```
+
+Export `GITL_API_KEY` in your environment for a real AI review; without it the
+hook performs the deterministic offline review (no network, no cost).
+
+Things to know:
+
+- **Offline by default.** No API key, no network, no per-commit cost. Set
+  `GITL_API_KEY` to opt into a real AI review.
+- **Non-blocking by default.** The hook prints the review but does not fail the
+  commit — same "WARN by default, hard gate is explicit opt-in" principle as the
+  CLI/Action. Add `args: [--fail-on=high]` to block.
+- **Latency.** A real-API review takes a few seconds; keep it off the hot path by
+  leaving it offline, or cap it with `--max-cost-usd`.
+- **Diff privacy.** With a real key the staged diff goes to your configured LLM
+  provider — use a self-hosted/enterprise provider (Ollama, Azure OpenAI) for
+  private code, see Providers above.
+
+### Without the pre-commit framework
+
+A plain git hook works too:
+
+```bash
+# .git/hooks/pre-commit  (chmod +x)
+#!/usr/bin/env bash
+set -euo pipefail
+# Offline, non-blocking review of staged changes (WARN by default).
+gitl review --staged || true
+# To block the commit on high risk instead, replace the line above with:
+#   gitl review --staged --fail-on=high
+```
 
 ## MCP server
 

@@ -112,6 +112,55 @@ func TestActionYAMLUpdatePRDescriptionWiring(t *testing.T) {
 	}
 }
 
+// TestPreCommitHooksYAML statically guards the pre-commit framework hook
+// manifest (.pre-commit-hooks.yaml) at the repo root. Like the action.yml
+// tests above, these are cheap string-contains asserts (no YAML parsing —
+// no new import, no schema coupling) protecting the deliberate decisions:
+//   - pass_filenames: false is the load-bearing field: without it the
+//     framework passes staged file names as positional arguments, which
+//     collides with the <range> positional argument (MaximumNArgs(1)) and
+//     silently breaks the hook invocation;
+//   - no --fail-on in the manifest ("non-blocking by default" — WARN by
+//     default, hard gate is the consumer's explicit args: opt-in);
+//   - no GITL_API_KEY in the manifest ("offline by default" — no network,
+//     no per-commit cost unless the user exports the key themselves).
+func TestPreCommitHooksYAML(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, ".pre-commit-hooks.yaml"))
+	if err != nil {
+		t.Fatalf("read .pre-commit-hooks.yaml: %v", err)
+	}
+	content := string(data)
+
+	if strings.TrimSpace(content) == "" {
+		t.Fatal(".pre-commit-hooks.yaml is empty")
+	}
+
+	for _, want := range []string{
+		"id: gitl-review",
+		"entry: gitl review --staged",
+		"language: golang",
+		"pass_filenames: false",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf(".pre-commit-hooks.yaml is missing %q", want)
+		}
+	}
+
+	if strings.Contains(content, "--fail-on") {
+		t.Error(".pre-commit-hooks.yaml must not set --fail-on: the hook is non-blocking by default; blocking is the consumer's explicit args: opt-in")
+	}
+	// GITL_API_KEY may be *mentioned* in the human-readable description:
+	// line ("offline by default … set GITL_API_KEY for a real AI review"),
+	// but must never be wired into any functional field (entry, env, args) —
+	// that would silently flip the hook from offline to networked.
+	for _, line := range strings.Split(content, "\n") {
+		if strings.Contains(line, "GITL_API_KEY") && !strings.Contains(line, "description:") {
+			t.Errorf(".pre-commit-hooks.yaml must not wire GITL_API_KEY outside the description (offline by default; a real key is the user's explicit env opt-in): %q", line)
+		}
+	}
+}
+
 // repoRoot walks up from this test file's directory to find go.mod, so the
 // test works regardless of the working directory `go test` is invoked from.
 func repoRoot(t *testing.T) string {
