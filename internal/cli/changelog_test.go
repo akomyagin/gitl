@@ -349,6 +349,47 @@ func TestChangelogAIJSONFormat(t *testing.T) {
 	}
 }
 
+// TestChangelogAIJSONBreakingCategoryOverlappingHashes: end-to-end --ai
+// --format=json regression for breaking_changes[].category. The model's
+// "Changed" entry squashes TWO commits while the breaking entry cites only
+// one of them — the joined display hashes differ ("h1, h2" vs "h2"), so only
+// individual-hash matching can link the breaking change to its category.
+func TestChangelogAIJSONBreakingCategoryOverlappingHashes(t *testing.T) {
+	dir := setupChangelogRepo(t)
+	hashes := gitShortHashes(t, dir) // newest first: [docs C, fix B, feat A]
+	featA, fixB := hashes[2], hashes[1]
+	content := "Here is the improved changelog.\n\n```changelog\n" +
+		fmt.Sprintf(`{"categories": {"Changed": [{"subject": "Reworked A and B together", "hashes": [%q, %q]}]}, "breaking": [{"subject": "Dropped the legacy behavior of B", "hashes": [%q]}]}`, featA, fixB, fixB) +
+		"\n```\n"
+	srv, _ := newChangelogAIServer(t, content)
+	t.Setenv("GITL_API_KEY", "sk-fake-changelog")
+
+	out, stderr, err := runChangelogInDir(t, dir, "--ai", "--base-url", srv.URL, "--no-cache", "--format=json")
+	if err != nil {
+		t.Fatalf("changelog --ai --format=json: %v\nstderr:\n%s", err, stderr)
+	}
+	var parsed struct {
+		BreakingChanges []struct {
+			Hash     string `json:"hash"`
+			Subject  string `json:"subject"`
+			Category string `json:"category"`
+		} `json:"breaking_changes"`
+	}
+	if err := json.Unmarshal([]byte(out), &parsed); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, out)
+	}
+	if len(parsed.BreakingChanges) != 1 {
+		t.Fatalf("breaking_changes has %d entries, want 1:\n%s", len(parsed.BreakingChanges), out)
+	}
+	got := parsed.BreakingChanges[0]
+	if got.Category != "Changed" {
+		t.Errorf("breaking_changes[0].category = %q, want %q:\n%s", got.Category, "Changed", out)
+	}
+	if got.Hash != fixB {
+		t.Errorf("breaking_changes[0].hash = %q, want %q", got.Hash, fixB)
+	}
+}
+
 func TestChangelogAIMalformedResponseFallsBack(t *testing.T) {
 	dir := setupChangelogRepo(t)
 	srv, calls := newChangelogAIServer(t, "Sorry, here is prose without any structured block.")

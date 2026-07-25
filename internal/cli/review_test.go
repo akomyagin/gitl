@@ -211,8 +211,11 @@ func TestBuildArtifactStats(t *testing.T) {
 	if art.Stats.Commits != 2 {
 		t.Errorf("commits = %d, want 2", art.Stats.Commits)
 	}
-	if art.Stats.FilesChanged != 2 { // a.go deduped across commits
-		t.Errorf("files_changed = %d, want 2", art.Stats.FilesChanged)
+	// FilesChanged counts the diff's sections (a.go only) — the same view the
+	// line stats use — NOT the commit metadata (which also lists b.go). See
+	// TestBuildArtifactStatsFilteredDiff for the exclude_globs cases.
+	if art.Stats.FilesChanged != 1 {
+		t.Errorf("files_changed = %d, want 1 (from diff headers)", art.Stats.FilesChanged)
 	}
 	if art.Stats.LinesAdded != 2 || art.Stats.LinesRemoved != 1 {
 		t.Errorf("lines +%d/-%d, want +2/-1", art.Stats.LinesAdded, art.Stats.LinesRemoved)
@@ -224,6 +227,74 @@ func TestBuildArtifactStats(t *testing.T) {
 	var b strings.Builder
 	if err := render.Render(&b, art, render.FormatJSON); err != nil {
 		t.Fatalf("render json: %v", err)
+	}
+}
+
+// TestBuildArtifactStatsFilteredDiff: Stats.FilesChanged must reflect the
+// FILTERED diff (post exclude_globs) — the same view LinesAdded/LinesRemoved
+// already use — not the unfiltered commit metadata. The one exception is a
+// metadata-only range review (empty filtered diff, non-empty commits — a
+// reachable modeRange state, see prepareReview), which keeps the historical
+// commit-metadata count instead of regressing to zero.
+func TestBuildArtifactStatsFilteredDiff(t *testing.T) {
+	t.Parallel()
+	cfg := &config.Config{
+		LLM: config.LLMConfig{Provider: "openai", Model: "gpt-4o-mini", APIKey: "k"},
+	}
+	resp := llm.Response{Content: "review", Risk: llm.Risk{Level: "low", Summary: "sum"}}
+	globs := []string{"*.lock", "vendor/**"}
+
+	section := func(p string) string {
+		return "diff --git a/" + p + " b/" + p + "\n--- a/" + p + "\n+++ b/" + p + "\n@@ -1 +1 @@\n-old\n+new\n"
+	}
+	kept := []string{"main.go", "internal/util.go"}
+	excluded := []string{"a.lock", "b.lock", "c.lock", "vendor/x.go", "vendor/y.go", "vendor/z.go"}
+
+	// Two commits touching 8 distinct files (2 kept + 6 excluded).
+	toChanges := func(paths []string) []gitlog.FileChange {
+		fc := make([]gitlog.FileChange, 0, len(paths))
+		for _, p := range paths {
+			fc = append(fc, gitlog.FileChange{Status: "M", Path: p})
+		}
+		return fc
+	}
+	commits := []gitlog.Commit{
+		{Hash: "h1", Author: "A", Subject: "s1", Files: toChanges(append(append([]string{}, kept...), excluded[:3]...))},
+		{Hash: "h2", Author: "B", Subject: "s2", Files: toChanges(excluded[3:])},
+	}
+
+	var raw strings.Builder
+	for _, p := range append(append([]string{}, kept...), excluded...) {
+		raw.WriteString(section(p))
+	}
+	var excludedOnly strings.Builder
+	for _, p := range excluded {
+		excludedOnly.WriteString(section(p))
+	}
+
+	tests := []struct {
+		name string
+		diff string // already shaped, as buildArtifact receives it (plan.diff)
+		want int
+	}{
+		{
+			name: "filtered diff wins over unfiltered commit metadata",
+			diff: filterDiffByGlobs(raw.String(), globs),
+			want: 2, // only the kept files — consistent with the line stats
+		},
+		{
+			name: "metadata-only fallback keeps commit-based count",
+			diff: filterDiffByGlobs(excludedOnly.String(), globs), // fully excluded → ""
+			want: 8,                                               // pre-fix ChangedFileCount(commits) behavior, not zero
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			art := buildArtifact(cfg, "r..s", commits, tc.diff, resp)
+			if art.Stats.FilesChanged != tc.want {
+				t.Errorf("files_changed = %d, want %d", art.Stats.FilesChanged, tc.want)
+			}
+		})
 	}
 }
 

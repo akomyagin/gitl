@@ -333,10 +333,14 @@ func aiChangelogArtifact(generatedAt time.Time, revRange string, commits []gitlo
 		}
 	}
 
-	// The single point where the hash list is formatted for display.
+	// The single point where the hash list is formatted for display. The
+	// individual hashes also travel along as data (Hashes) so the JSON
+	// renderer can match breaking entries to category entries per hash —
+	// never by re-splitting the formatted display string.
 	toRenderEntry := func(e validatedEntry, isBreaking bool) render.ChangelogEntry {
 		return render.ChangelogEntry{
 			Hash:     strings.Join(e.hashes, ", "),
+			Hashes:   e.hashes,
 			Subject:  e.subject,
 			Breaking: isBreaking,
 		}
