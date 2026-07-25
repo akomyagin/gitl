@@ -363,13 +363,22 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 }
 
 // buildArtifact assembles the render artifact from the review inputs and the
-// provider response. With no commit metadata (a staged review has none), the
-// changed-file count comes from the diff headers instead.
+// provider response. diff is the SHAPED diff (post exclude_globs filtering
+// and truncation) — the text that actually reached the LLM.
 func buildArtifact(cfg *config.Config, revRange string, commits []gitlog.Commit, diff string, resp llm.Response) render.Artifact {
 	added, removed := gitlog.DiffLineStats(diff)
-	filesChanged := gitlog.ChangedFileCount(commits)
-	if len(commits) == 0 {
-		filesChanged = gitlog.DiffFileCount(diff)
+	// Stats must be internally consistent: LinesAdded/LinesRemoved already
+	// count the filtered diff, so FilesChanged counts the same diff's section
+	// headers — not the unfiltered commit metadata, which would report files
+	// exclude_globs removed from the review. The one exception is a
+	// metadata-only range review (prepareReview allows a range whose diff is
+	// empty or fully excluded — "commit metadata alone can be worth
+	// reviewing"): there the diff has no sections, and commit metadata is the
+	// only remaining signal, so keep the historical ChangedFileCount rather
+	// than reporting zero files for a non-empty range.
+	filesChanged := gitlog.DiffFileCount(diff)
+	if filesChanged == 0 && len(commits) > 0 {
+		filesChanged = gitlog.ChangedFileCount(commits)
 	}
 	rc := make([]render.Commit, 0, len(commits))
 	for _, c := range commits {

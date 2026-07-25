@@ -24,9 +24,34 @@ const ChangelogSchemaVersion = 1
 
 // ChangelogEntry is one changelog line, ready for rendering.
 type ChangelogEntry struct {
-	Hash     string
-	Subject  string
+	// Hash is the DISPLAY string: a single hash on the deterministic path, or
+	// several joined with ", " when the --ai path squashes multiple commits
+	// into one entry. It is what every renderer prints.
+	Hash    string
+	Subject string
+	// Hashes carries the same hashes individually, as data. It exists so the
+	// JSON renderer can match breaking entries to category entries by
+	// set-membership of INDIVIDUAL hashes instead of exact equality of the
+	// joined Hash strings (which differ whenever the two entries list
+	// overlapping-but-not-identical hash sets). Internal only — never
+	// serialized; the JSON wire shape still exposes just the joined Hash.
+	Hashes   []string
 	Breaking bool
+}
+
+// entryHashes returns the entry's individual hashes. Entries constructed
+// before Hashes existed (e.g. bare struct literals in tests) fall back to the
+// single display Hash — safe only because a single-hash entry's display
+// string IS its hash; a joined multi-hash display string is deliberately
+// never re-split (see aiChangelogArtifact in internal/cli/changelog.go).
+func entryHashes(e ChangelogEntry) []string {
+	if len(e.Hashes) > 0 {
+		return e.Hashes
+	}
+	if e.Hash == "" {
+		return nil
+	}
+	return []string{e.Hash}
 }
 
 // ChangelogArtifact is the fully-computed changelog, carrying everything the
@@ -53,6 +78,7 @@ func NewChangelogArtifact(generatedAt time.Time, revRange string, cl gitlog.Chan
 		for _, e := range cl.Categories[name] {
 			categories[name] = append(categories[name], ChangelogEntry{
 				Hash:     e.Hash,
+				Hashes:   []string{e.Hash},
 				Subject:  e.Subject,
 				Breaking: e.Breaking,
 			})
@@ -63,6 +89,7 @@ func NewChangelogArtifact(generatedAt time.Time, revRange string, cl gitlog.Chan
 	for _, e := range cl.Breaking {
 		breaking = append(breaking, ChangelogEntry{
 			Hash:     e.Hash,
+			Hashes:   []string{e.Hash},
 			Subject:  e.BreakingText,
 			Breaking: true,
 		})
@@ -195,15 +222,29 @@ type jsonChangeEntry struct {
 }
 
 func renderChangelogJSON(w io.Writer, art ChangelogArtifact) error {
+	// categoryOf maps each INDIVIDUAL breaking hash to the first category (in
+	// gitlog.CategoryOrder, then entry order) whose breaking-marked entry
+	// carries it. Keying on individual hashes rather than the joined display
+	// Hash is what makes breaking_changes[].category survive the --ai path: a
+	// breaking entry and its category counterpart may list overlapping but
+	// non-identical hash sets, so their joined strings need not be equal.
+	type hashCategory struct {
+		name string
+		rank int // index into gitlog.CategoryOrder, for first-match ordering
+	}
 	categories := make(map[string][]jsonChangeEntry, len(gitlog.CategoryOrder))
-	categoryOf := make(map[string]string) // hash -> category, for breaking_changes[].category
-	for _, name := range gitlog.CategoryOrder {
+	categoryOf := make(map[string]hashCategory)
+	for rank, name := range gitlog.CategoryOrder {
 		entries := art.Categories[name]
 		list := make([]jsonChangeEntry, 0, len(entries))
 		for _, e := range entries {
 			list = append(list, jsonChangeEntry{Hash: e.Hash, Subject: e.Subject, Breaking: e.Breaking})
 			if e.Breaking {
-				categoryOf[e.Hash] = name
+				for _, h := range entryHashes(e) {
+					if _, seen := categoryOf[h]; !seen {
+						categoryOf[h] = hashCategory{name: name, rank: rank}
+					}
+				}
 			}
 		}
 		categories[name] = list
@@ -211,10 +252,20 @@ func renderChangelogJSON(w io.Writer, art ChangelogArtifact) error {
 
 	breaking := make([]jsonBreakingChange, 0, len(art.Breaking))
 	for _, e := range art.Breaking {
+		// A breaking entry's category is the earliest (CategoryOrder-wise)
+		// category matched by ANY of its individual hashes; "" when none match
+		// (the model listed a breaking change without a category counterpart).
+		category := ""
+		bestRank := len(gitlog.CategoryOrder)
+		for _, h := range entryHashes(e) {
+			if c, ok := categoryOf[h]; ok && c.rank < bestRank {
+				category, bestRank = c.name, c.rank
+			}
+		}
 		breaking = append(breaking, jsonBreakingChange{
 			Hash:     e.Hash,
 			Subject:  e.Subject,
-			Category: categoryOf[e.Hash],
+			Category: category,
 		})
 	}
 

@@ -195,6 +195,129 @@ func TestChangelogJSONKeepsEscapedControlBytes(t *testing.T) {
 	}
 }
 
+// decodeBreakingChanges renders art as JSON and returns the parsed
+// breaking_changes list.
+func decodeBreakingChanges(t *testing.T, art ChangelogArtifact) []struct {
+	Hash     string `json:"hash"`
+	Subject  string `json:"subject"`
+	Category string `json:"category"`
+} {
+	t.Helper()
+	var b strings.Builder
+	if err := RenderChangelog(&b, art, FormatJSON); err != nil {
+		t.Fatalf("RenderChangelog: %v", err)
+	}
+	var decoded struct {
+		BreakingChanges []struct {
+			Hash     string `json:"hash"`
+			Subject  string `json:"subject"`
+			Category string `json:"category"`
+		} `json:"breaking_changes"`
+	}
+	if err := json.Unmarshal([]byte(b.String()), &decoded); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, b.String())
+	}
+	return decoded.BreakingChanges
+}
+
+// TestChangelogJSONBreakingCategoryOverlappingHashes is the regression test
+// for the --ai artifact shape where a category entry and its breaking
+// counterpart list OVERLAPPING but NON-identical hash sets: the category
+// entry squashes two commits (display Hash "aaaaaaa, bbbbbbb"), the breaking
+// entry cites only one of them ("bbbbbbb"). Exact joined-string matching
+// used to miss here, leaving breaking_changes[].category empty; matching on
+// the individual Hashes must find "Changed".
+func TestChangelogJSONBreakingCategoryOverlappingHashes(t *testing.T) {
+	t.Parallel()
+	art := ChangelogArtifact{
+		GeneratedAt: changelogGeneratedAt,
+		Range:       "v1.0.0..HEAD",
+		Categories: map[string][]ChangelogEntry{
+			"Changed": {
+				{
+					Hash:     "aaaaaaa, bbbbbbb",
+					Hashes:   []string{"aaaaaaa", "bbbbbbb"},
+					Subject:  "Reworked the session store",
+					Breaking: true,
+				},
+			},
+		},
+		Breaking: []ChangelogEntry{
+			{
+				Hash:     "bbbbbbb",
+				Hashes:   []string{"bbbbbbb"},
+				Subject:  "Dropped config schema v0",
+				Breaking: true,
+			},
+		},
+		MissingRequiredCategories: []string{},
+	}
+
+	breaking := decodeBreakingChanges(t, art)
+	if len(breaking) != 1 {
+		t.Fatalf("breaking_changes has %d entries, want 1", len(breaking))
+	}
+	if breaking[0].Category != "Changed" {
+		t.Errorf("breaking_changes[0].category = %q, want %q (matched via individual hash bbbbbbb)", breaking[0].Category, "Changed")
+	}
+	if breaking[0].Hash != "bbbbbbb" {
+		t.Errorf("breaking_changes[0].hash = %q, want the joined display string %q", breaking[0].Hash, "bbbbbbb")
+	}
+}
+
+// TestChangelogJSONBreakingCategoryFirstInCategoryOrder: when a breaking
+// entry's hashes match breaking-marked entries in SEVERAL categories, the
+// reported category is the first one in gitlog.CategoryOrder ("Added" beats
+// "Fixed"), regardless of the order of the entry's own hash list.
+func TestChangelogJSONBreakingCategoryFirstInCategoryOrder(t *testing.T) {
+	t.Parallel()
+	art := ChangelogArtifact{
+		GeneratedAt: changelogGeneratedAt,
+		Range:       "v1.0.0..HEAD",
+		Categories: map[string][]ChangelogEntry{
+			"Added": {
+				{Hash: "aaaaaaa", Hashes: []string{"aaaaaaa"}, Subject: "New endpoint", Breaking: true},
+			},
+			"Fixed": {
+				{Hash: "fffffff", Hashes: []string{"fffffff"}, Subject: "Fix crash", Breaking: true},
+			},
+		},
+		Breaking: []ChangelogEntry{
+			{
+				// "Fixed"'s hash listed FIRST — CategoryOrder must still win.
+				Hash:     "fffffff, aaaaaaa",
+				Hashes:   []string{"fffffff", "aaaaaaa"},
+				Subject:  "Combined breaking change",
+				Breaking: true,
+			},
+		},
+		MissingRequiredCategories: []string{},
+	}
+
+	breaking := decodeBreakingChanges(t, art)
+	if len(breaking) != 1 {
+		t.Fatalf("breaking_changes has %d entries, want 1", len(breaking))
+	}
+	if breaking[0].Category != "Added" {
+		t.Errorf("breaking_changes[0].category = %q, want %q (first in CategoryOrder)", breaking[0].Category, "Added")
+	}
+}
+
+// TestChangelogJSONDeterministicBreakingCategory pins the deterministic
+// (non-AI) path, which was already correct before the individual-hash
+// matching rewrite: each entry maps 1:1 to a single hash, and the breaking
+// entry's category is the one its commit was categorized into.
+func TestChangelogJSONDeterministicBreakingCategory(t *testing.T) {
+	t.Parallel()
+	breaking := decodeBreakingChanges(t, breakingChangelogArtifact())
+	if len(breaking) != 1 {
+		t.Fatalf("breaking_changes has %d entries, want 1", len(breaking))
+	}
+	if breaking[0].Category != "Added" {
+		t.Errorf("breaking_changes[0].category = %q, want %q (feat: → Added)", breaking[0].Category, "Added")
+	}
+}
+
 func TestChangelogMissingRequiredCategoriesInJSON(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder
