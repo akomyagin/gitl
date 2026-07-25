@@ -301,6 +301,11 @@ Security best practices:
 - **Diff privacy.** In CI, the diff is sent to whichever LLM provider is configured
   (default: OpenAI-compatible API). For private code, use a self-hosted/enterprise provider
   (Ollama, Azure OpenAI) — see Providers above.
+- **Provider selection.** By default the Action uses your config's provider (OpenAI-compatible
+  if unset). To target a native provider, pass `provider:` (`openai`|`ollama`|`azure_openai`|`anthropic`|`gemini`),
+  and optionally `model:` and `base-url:`, alongside `gitl-api-key:`. All three are optional and,
+  when omitted, fall through to your `.gitl.yaml`/personal config and gitl's built-in defaults — see
+  Providers above. Example: `provider: anthropic` with a Claude key in `secrets.GITL_API_KEY`.
 - **Secret masking.** GitHub automatically masks `secrets.*` values in runner logs as
   `***`, but that's not a reason to print the key in your own workflow steps.
 
