@@ -284,3 +284,236 @@ func TestStreamerInterfaceAssertion(t *testing.T) {
 	t.Parallel()
 	var _ Streamer = (*Client)(nil)
 }
+
+// TestSanitizingWriterFiltersControlRuneSplitAcrossWrites is the security
+// regression test for the stateless-sanitizer bypass: the 2-byte UTF-8
+// encoding of U+009B (CSI) — 0xC2 0x9B — split exactly at a Write boundary
+// used to be seen as two independent "invalid" single bytes and passed through
+// unfiltered, reassembling into a live CSI on the terminal. The stateful
+// writer must hold the 0xC2 tail over and drop the reassembled control rune.
+func TestSanitizingWriterFiltersControlRuneSplitAcrossWrites(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	sw := &sanitizingWriter{w: &out}
+	if _, err := sw.Write([]byte{'a', 0xC2}); err != nil {
+		t.Fatalf("Write 1: %v", err)
+	}
+	if _, err := sw.Write([]byte{0x9B, 'b'}); err != nil {
+		t.Fatalf("Write 2: %v", err)
+	}
+	if err := sw.flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+
+	if got := out.String(); got != "ab" {
+		t.Errorf("output = %q, want %q (split U+009B must be dropped)", got, "ab")
+	}
+	if bytes.Contains(out.Bytes(), []byte{0xC2, 0x9B}) {
+		t.Error("reassembled CSI (0xC2 0x9B) leaked to the terminal writer")
+	}
+}
+
+// TestSanitizingWriterPreservesMultibyteSplitAtEveryBoundary verifies ordinary
+// multi-byte content (Cyrillic 2-byte, emoji 3- and 4-byte sequences) split
+// across two Write calls at EVERY possible byte offset is preserved
+// byte-for-byte — the held-over pending tail must never corrupt real content.
+func TestSanitizingWriterPreservesMultibyteSplitAtEveryBoundary(t *testing.T) {
+	t.Parallel()
+
+	const text = "фикс ✅ готово 👍"
+	raw := []byte(text)
+	for split := 0; split <= len(raw); split++ {
+		var out bytes.Buffer
+		sw := &sanitizingWriter{w: &out}
+		if _, err := sw.Write(raw[:split]); err != nil {
+			t.Fatalf("split %d: Write 1: %v", split, err)
+		}
+		if _, err := sw.Write(raw[split:]); err != nil {
+			t.Fatalf("split %d: Write 2: %v", split, err)
+		}
+		if err := sw.flush(); err != nil {
+			t.Fatalf("split %d: flush: %v", split, err)
+		}
+		if got := out.String(); got != text {
+			t.Errorf("split %d: output = %q, want %q", split, got, text)
+		}
+	}
+}
+
+// TestSanitizingWriterFlushEmitsDanglingIncompleteSequence: a stream that
+// genuinely ends mid-rune (LimitReader truncation) must not silently lose the
+// held-over bytes — flush passes them through as-is, matching the
+// invalid-byte policy.
+func TestSanitizingWriterFlushEmitsDanglingIncompleteSequence(t *testing.T) {
+	t.Parallel()
+
+	var out bytes.Buffer
+	sw := &sanitizingWriter{w: &out}
+	// 'a' + the first two bytes of a 4-byte emoji, then the stream ends.
+	if _, err := sw.Write([]byte{'a', 0xF0, 0x9F}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if got := out.String(); got != "a" {
+		t.Errorf("before flush: output = %q, want %q (incomplete tail held back)", got, "a")
+	}
+	if err := sw.flush(); err != nil {
+		t.Fatalf("flush: %v", err)
+	}
+	if got := out.String(); got != "a\xf0\x9f" {
+		t.Errorf("after flush: output = %q, want %q (dangling bytes emitted)", got, "a\xf0\x9f")
+	}
+	// flush is idempotent: nothing more comes out.
+	if err := sw.flush(); err != nil {
+		t.Fatalf("second flush: %v", err)
+	}
+	if got := out.String(); got != "a\xf0\x9f" {
+		t.Errorf("after second flush: output = %q, want %q", got, "a\xf0\x9f")
+	}
+}
+
+// TestSanitizingWriterStripsBidiRunes: bidi override/isolate characters
+// (Trojan Source) are part of the shared textsafe removal set and must be
+// dropped on the streaming path too, including when split across Writes
+// (U+202E is 3 bytes in UTF-8).
+func TestSanitizingWriterStripsBidiRunes(t *testing.T) {
+	t.Parallel()
+
+	raw := []byte("photo\u202egnp.exe")
+	for split := 0; split <= len(raw); split++ {
+		var out bytes.Buffer
+		sw := &sanitizingWriter{w: &out}
+		if _, err := sw.Write(raw[:split]); err != nil {
+			t.Fatalf("split %d: Write 1: %v", split, err)
+		}
+		if _, err := sw.Write(raw[split:]); err != nil {
+			t.Fatalf("split %d: Write 2: %v", split, err)
+		}
+		if err := sw.flush(); err != nil {
+			t.Fatalf("split %d: flush: %v", split, err)
+		}
+		if got := out.String(); got != "photognp.exe" {
+			t.Errorf("split %d: output = %q, want %q (RLO must be stripped)", split, got, "photognp.exe")
+		}
+	}
+}
+
+// TestStreamInStreamErrorChunkReturnsError: an OpenAI-compatible proxy can
+// return 200 and then report failure as an in-stream error event. That used to
+// decode as a zero-Choices chunk and be silently skipped, producing an empty
+// "successful" review; it must surface as an error instead.
+func TestStreamInStreamErrorChunkReturnsError(t *testing.T) {
+	t.Parallel()
+
+	payload := "data: {\"error\":{\"message\":\"boom\",\"type\":\"server_error\"}}\n\n" +
+		"data: [DONE]\n\n"
+
+	srv := sseServer(t, payload)
+	defer srv.Close()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	_, err := c.Stream(context.Background(), Request{User: "hi", Model: "gpt-4o-mini"}, &w)
+	if err == nil {
+		t.Fatal("expected an error for an in-stream error chunk, got nil")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error %q should carry the provider message %q", err, "boom")
+	}
+	if w.Len() != 0 {
+		t.Errorf("no content chunks were sent, nothing should reach the writer; got %q", w.String())
+	}
+}
+
+// TestStreamInStreamErrorAfterContentReturnsError: when the error event
+// arrives after some tokens were already streamed, the error is still
+// surfaced — the CLI's fallback logic (written > 0) then reports it rather
+// than pretending the truncated output is a complete review.
+func TestStreamInStreamErrorAfterContentReturnsError(t *testing.T) {
+	t.Parallel()
+
+	payload := "data: {\"choices\":[{\"delta\":{\"content\":\"partial \"}}]}\n\n" +
+		"data: {\"error\":{\"message\":\"boom\"}}\n\n"
+
+	srv := sseServer(t, payload)
+	defer srv.Close()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	_, err := c.Stream(context.Background(), Request{User: "hi", Model: "gpt-4o-mini"}, &w)
+	if err == nil {
+		t.Fatal("expected an error for an in-stream error chunk after content, got nil")
+	}
+	if !strings.Contains(err.Error(), "boom") {
+		t.Errorf("error %q should carry the provider message %q", err, "boom")
+	}
+	// The already-streamed prefix legitimately reached the writer.
+	if !strings.Contains(w.String(), "partial") {
+		t.Errorf("previously streamed tokens should remain in the writer; got %q", w.String())
+	}
+}
+
+// TestStreamEmptyBodyReturnsError: a 200 response whose body yields no content
+// at all (empty, non-SSE garbage, or just [DONE]) must be an error, not a
+// "successful" empty Response — otherwise the CLI prints a near-empty review
+// and the empty response used to poison the shared LLM cache for the TTL.
+func TestStreamEmptyBodyReturnsError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		payload string
+	}{
+		{name: "completely empty body", payload: ""},
+		{name: "only DONE", payload: "data: [DONE]\n\n"},
+		{name: "non-SSE garbage", payload: "<html>bad gateway</html>\n"},
+		{name: "only empty deltas", payload: "data: {\"choices\":[{\"delta\":{\"content\":\"\"}}]}\n\ndata: [DONE]\n\n"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := sseServer(t, tt.payload)
+			defer srv.Close()
+
+			c := newStreamClient(t, srv.URL)
+			var w bytes.Buffer
+			_, err := c.Stream(context.Background(), Request{User: "hi", Model: "gpt-4o-mini"}, &w)
+			if err == nil {
+				t.Fatal("expected an error for a stream with no content, got nil")
+			}
+			if !strings.Contains(err.Error(), "no content") {
+				t.Errorf("error %q should mention missing content", err)
+			}
+		})
+	}
+}
+
+// TestStreamWithoutDoneButWithContentSucceeds guards against over-tightening
+// the empty-stream check: a stream that produced real content but ended
+// without an explicit [DONE] line (e.g. LimitReader truncation, a proxy that
+// just closes the connection) must still succeed with the accumulated text.
+func TestStreamWithoutDoneButWithContentSucceeds(t *testing.T) {
+	t.Parallel()
+
+	payload := "data: {\"choices\":[{\"delta\":{\"content\":\"Hello \"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"world\"}}]}\n\n"
+	// No [DONE] — the body just ends.
+
+	srv := sseServer(t, payload)
+	defer srv.Close()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	resp, err := c.Stream(context.Background(), Request{User: "hi", Model: "gpt-4o-mini"}, &w)
+	if err != nil {
+		t.Fatalf("Stream without [DONE] but with content must succeed: %v", err)
+	}
+	if !strings.Contains(resp.Content, "Hello world") {
+		t.Errorf("resp.Content = %q, want it to contain %q", resp.Content, "Hello world")
+	}
+	if !strings.Contains(w.String(), "Hello world") {
+		t.Errorf("streamed output = %q, want it to contain %q", w.String(), "Hello world")
+	}
+}

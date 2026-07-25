@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/akomyagin/gitl/internal/textsafe"
 )
 
 // Streamer is an optional interface for providers that support token-by-token
@@ -32,42 +34,74 @@ type streamChatRequest struct {
 }
 
 // streamChunk is one SSE "data:" event of an OpenAI-compatible streaming
-// response. Only the incremental delta content is consumed.
+// response. The incremental delta content is consumed; a top-level "error"
+// object (how OpenAI-compatible proxies report in-stream failures over a 200
+// response) aborts the stream instead of being skipped as a zero-Choices chunk.
 type streamChunk struct {
 	Choices []struct {
 		Delta struct {
 			Content string `json:"content"`
 		} `json:"delta"`
 	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // sanitizingWriter strips terminal control characters from everything written
-// through it, defusing ANSI/terminal escape injection in streamed model output
-// (which may quote attacker-controlled commit messages verbatim). The policy
-// mirrors render's sanitizeTerminal — deliberately duplicated here, not
-// imported, to avoid a render↔llm cross-package dependency: valid runes in C0
-// (0x00–0x1F, except '\t' and '\n'), DEL (0x7F), and C1 (0x80–0x9F) are
-// removed (not replaced). Bytes that do not decode as valid UTF-8 (e.g. a
-// multi-byte rune split across an SSE chunk boundary) pass through untouched —
-// only validly-decoded control runes are dropped.
-type sanitizingWriter struct{ w io.Writer }
+// through it, defusing ANSI/terminal escape injection and bidi "Trojan Source"
+// spoofing in streamed model output (which may quote attacker-controlled
+// commit messages verbatim). The removal policy is the shared
+// textsafe.DropRune set — the same one render's sanitizeTerminal applies on
+// the buffered path — so the two output paths cannot diverge.
+//
+// The writer is stateful across Write calls: SSE delivers text in arbitrary
+// chunk-sized pieces, so a multi-byte UTF-8 rune (including the encoding of a
+// control character such as U+009B CSI, bytes 0xC2 0x9B) can be split exactly
+// at a chunk boundary. A trailing incomplete-but-potentially-valid sequence is
+// held in pending and re-examined when the next chunk arrives, instead of
+// leaking through one byte at a time past the rune filter. Bytes that are
+// definitively invalid UTF-8 (not merely incomplete) pass through untouched,
+// as before. Use via pointer receiver; call flush at end of stream.
+type sanitizingWriter struct {
+	w io.Writer
+	// pending holds at most utf8.UTFMax-1 bytes of a trailing incomplete
+	// multi-byte sequence, carried over to the next Write call.
+	pending []byte
+}
 
-func (s sanitizingWriter) Write(p []byte) (int, error) {
-	out := make([]byte, 0, len(p))
-	for i := 0; i < len(p); {
-		r, size := utf8.DecodeRune(p[i:])
+func (s *sanitizingWriter) Write(p []byte) (int, error) {
+	buf := p
+	if len(s.pending) > 0 {
+		// Prepend the held-over tail of the previous chunk. pending is at most
+		// 3 bytes, so the copy is negligible.
+		buf = append(s.pending, p...)
+		s.pending = nil
+	}
+	out := make([]byte, 0, len(buf))
+	for i := 0; i < len(buf); {
+		if !utf8.FullRune(buf[i:]) {
+			// Incomplete prefix of a valid multi-byte sequence at the end of
+			// the input (FullRune is false ONLY for such prefixes — invalid
+			// encodings count as full width-1 error runes). Hold it for the
+			// next Write instead of emitting the bytes unfiltered.
+			s.pending = append([]byte(nil), buf[i:]...)
+			break
+		}
+		r, size := utf8.DecodeRune(buf[i:])
 		if r == utf8.RuneError && size == 1 {
-			// Invalid/truncated byte (possibly a rune cut by a chunk boundary):
-			// keep it as-is rather than risk corrupting multi-byte content.
-			out = append(out, p[i])
+			// Definitively invalid byte: keep it as-is rather than risk
+			// corrupting surrounding content (matches the buffered path,
+			// where a lone invalid byte renders as U+FFFD — harmless).
+			out = append(out, buf[i])
 			i++
 			continue
 		}
-		if dropControlRune(r) {
+		if textsafe.DropRune(r) {
 			i += size
 			continue
 		}
-		out = append(out, p[i:i+size]...)
+		out = append(out, buf[i:i+size]...)
 		i += size
 	}
 	if len(out) > 0 {
@@ -76,17 +110,24 @@ func (s sanitizingWriter) Write(p []byte) (int, error) {
 		}
 	}
 	// The whole input is considered consumed even when bytes were filtered
-	// out, per the io.Writer contract (no spurious short-write errors).
+	// out or held over in pending, per the io.Writer contract (no spurious
+	// short-write errors).
 	return len(p), nil
 }
 
-// dropControlRune reports whether r is a terminal control rune to remove:
-// C0 minus '\t'/'\n', DEL, or C1.
-func dropControlRune(r rune) bool {
-	if r == '\t' || r == '\n' {
-		return false
+// flush emits any bytes still held in pending at the true end of the stream.
+// A stream that legitimately ends mid-rune (e.g. LimitReader truncation) would
+// otherwise silently lose those bytes; they pass through as-is, matching the
+// invalid-byte policy above (an incomplete tail can no longer assemble into a
+// control rune once no more input is coming).
+func (s *sanitizingWriter) flush() error {
+	if len(s.pending) == 0 {
+		return nil
 	}
-	return r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F)
+	p := s.pending
+	s.pending = nil
+	_, err := s.w.Write(p)
+	return err
 }
 
 // Stream sends a streaming chat/completions request and writes each token to w
@@ -136,7 +177,7 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 	// below intentionally keeps the RAW text — ParseRisk needs the unfiltered
 	// stream, and the risk header is sanitized on output via
 	// render.RiskHeaderLine.
-	sw := sanitizingWriter{w: w}
+	sw := &sanitizingWriter{w: w}
 
 	var buf strings.Builder
 	// Cap the TOTAL bytes read from the streaming body at the same threshold
@@ -174,6 +215,13 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 			// Skip malformed chunks rather than aborting the whole stream.
 			continue
 		}
+		if chunk.Error != nil {
+			// In-stream error event over a 200 response (OpenAI-compatible
+			// proxies report failures this way). Without this check the chunk
+			// has zero Choices and would be silently skipped, turning a
+			// genuine provider failure into an empty "successful" review.
+			return Response{}, fmt.Errorf("llm: %s stream error: %s", c.provider, chunk.Error.Message)
+		}
 		if len(chunk.Choices) == 0 {
 			continue
 		}
@@ -186,8 +234,23 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 		}
 		buf.WriteString(delta)
 	}
+	// True end of stream: emit any incomplete trailing UTF-8 sequence still
+	// held by the sanitizer so a legitimately truncated final rune is not lost.
+	if err := sw.flush(); err != nil {
+		return Response{}, fmt.Errorf("llm: write stream output: %w", err)
+	}
 	if err := scanner.Err(); err != nil {
 		return Response{}, fmt.Errorf("llm: read stream: %w", err)
+	}
+	if buf.Len() == 0 {
+		// Nothing accumulated at all: an empty/malformed 200 body, or a stream
+		// with no content deltas. Surfacing an error (instead of a "successful"
+		// empty Response) lets the CLI fall back to the buffered path and keeps
+		// the empty result out of the shared LLM cache. Note: a stream that
+		// produced SOME content but ended without "data: [DONE]" still succeeds
+		// — that is the intentional graceful degradation for LimitReader
+		// truncation above.
+		return Response{}, fmt.Errorf("llm: %s stream ended with no content", c.provider)
 	}
 
 	stripped, risk, ok := ParseRisk(buf.String())

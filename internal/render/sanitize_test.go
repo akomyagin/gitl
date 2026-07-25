@@ -3,17 +3,17 @@ package render
 import (
 	"strings"
 	"testing"
+
+	"github.com/akomyagin/gitl/internal/textsafe"
 )
 
-// assertNoControlBytes fails the test if s contains any rune from the removal
-// set: C0 controls other than '\t'/'\n' (which includes '\r'), DEL, or C1.
+// assertNoControlBytes fails the test if s contains any rune from the shared
+// removal set (textsafe.DropRune): C0 controls other than '\t'/'\n' (which
+// includes '\r'), DEL, C1, or bidi override/isolate characters.
 func assertNoControlBytes(t *testing.T, s string) {
 	t.Helper()
 	for i, r := range s {
-		if r == '\t' || r == '\n' {
-			continue
-		}
-		if r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F) {
+		if textsafe.DropRune(r) {
 			t.Errorf("control rune %#U survived at index %d in %q", r, i, s)
 		}
 	}
@@ -63,6 +63,24 @@ func TestSanitizeTerminal(t *testing.T) {
 			name: "hidden text attack",
 			in:   "feat: normal\x1b[8mHIDDEN\x1b[0m",
 			want: "feat: normal[8mHIDDEN[0m",
+		},
+		{
+			// Trojan Source (CVE-2021-42574 class): RLO visually reverses the
+			// following text on a bidi-aware terminal — a classic filename
+			// spoof. All bidi embeddings/overrides must be stripped.
+			name: "bidi override attack stripped",
+			in:   "fix: rename photo\u202egnp.exe",
+			want: "fix: rename photognp.exe",
+		},
+		{
+			name: "bidi embeddings and pdf stripped",
+			in:   "a\u202ab\u202bc\u202cd\u202de",
+			want: "abcde",
+		},
+		{
+			name: "bidi isolates stripped",
+			in:   "a\u2066b\u2067c\u2068d\u2069e",
+			want: "abcde",
 		},
 		{
 			name: "empty string",
