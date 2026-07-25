@@ -32,11 +32,12 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3.9.1
 
-      # Both version-pin checks (this one and "Verify pipe.yml image tag" in
-      # docker-publish) compare the *clean* version — the tag with its
-      # leading "v" stripped — so the two checks stay symmetric even though
-      # action.yml's default keeps the "v" prefix while pipe.yml's image tag
-      # does not.
+      # All three version-pin checks (this one, "Verify gitl-review.yml
+      # version pin" below, and "Verify pipe.yml image tag" in docker-publish)
+      # compare the *clean* version — the tag with its leading "v" stripped —
+      # so the checks stay symmetric even though action.yml's and
+      # gitl-review.yml's defaults keep the "v" prefix while pipe.yml's image
+      # tag does not.
       - name: Verify action.yml version pin
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
@@ -61,6 +62,32 @@ jobs:
           fi
           echo "OK: action.yml inputs.gitl-version.default=$DEFAULT"
 
+      # Same version-sync invariant as above (docs/TECHNICAL_PLAN.md §12.2),
+      # applied to the third manifest that embeds a default CLI version: the
+      # GitLab CI/CD Catalog component published by the gitlab-mirror job.
+      - name: Verify gitl-review.yml version pin
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          # Anchored extraction, same approach as the action.yml check above,
+          # adjusted for this file's deeper nesting: the `default:` line
+          # (6-space indent) directly inside the `gitl_version:` input block
+          # (4-space key under spec.inputs).
+          DEFAULT=$(awk '
+            /^    gitl_version:/ { insec = 1; next }
+            insec && /^    [^ ]/ { insec = 0 }
+            insec && /^      default:/ { val = $2; gsub(/"/, "", val); print val; exit }
+          ' templates/gitl-review.yml)
+          if [ -z "$DEFAULT" ]; then
+            echo 'ERROR: could not extract spec.inputs.gitl_version.default from templates/gitl-review.yml — did its structure change?'
+            exit 1
+          fi
+          if [ "${DEFAULT#v}" != "$VERSION" ]; then
+            printf 'ERROR: templates/gitl-review.yml spec.inputs.gitl_version.default="%s" does not match release tag "%s"\n' "$DEFAULT" "$GITHUB_REF_NAME"
+            echo 'Update templates/gitl-review.yml spec.inputs.gitl_version.default before tagging.'
+            exit 1
+          fi
+          echo "OK: gitl-review.yml spec.inputs.gitl_version.default=$DEFAULT"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
@@ -72,8 +99,14 @@ jobs:
       - name: Compute artifact hashes
         id: hash
         run: |
+          set -euo pipefail
           cd dist
-          echo "hashes=$(sha256sum gitl_*.tar.gz gitl_*.zip checksums.txt | base64 -w0)" >> "$GITHUB_OUTPUT"
+          hashes="$(sha256sum gitl_*.tar.gz gitl_*.zip checksums.txt | base64 -w0)"
+          if [ -z "$hashes" ]; then
+            echo "ERROR: computed empty provenance hash list"
+            exit 1
+          fi
+          echo "hashes=$hashes" >> "$GITHUB_OUTPUT"
 
   provenance:
     needs: [release]
