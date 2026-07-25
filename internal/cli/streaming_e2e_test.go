@@ -277,3 +277,115 @@ func TestStreamingDisabledWhenOutputTemplateFileSet(t *testing.T) {
 		t.Errorf("raw model body leaked into templated output — streaming path was used instead of buffered:\n%s", out)
 	}
 }
+
+// nonStreamerWarning is the stderr marker runReview logs (at Warn, visible at
+// the default log level) when streaming was wanted but the provider does not
+// implement llm.Streamer.
+const nonStreamerWarning = "provider does not support streaming"
+
+// anthropicReviewBody is the review text the mock Anthropic server returns.
+const anthropicReviewBody = "This is the anthropic buffered review body."
+
+// anthropicOneShotHandler emulates the Anthropic Messages API with a single
+// buffered JSON response carrying a valid ```risk``` block (wire shape copied
+// from internal/llm/anthropic_test.go respondAnthropicOK). It counts requests
+// so tests can assert no streaming attempt ever hit the wire.
+type anthropicOneShotHandler struct {
+	calls atomic.Int32
+}
+
+func (h *anthropicOneShotHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	h.calls.Add(1)
+	content := anthropicReviewBody +
+		"\n```risk\n{\"level\":\"low\",\"summary\":\"anthropic ok\"}\n```"
+	w.Header().Set("Content-Type", "application/json")
+	body := map[string]any{
+		"content":     []map[string]any{{"type": "text", "text": content}},
+		"stop_reason": "end_turn",
+	}
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		panic(fmt.Sprintf("encode mock anthropic response: %v", err))
+	}
+}
+
+// TestNonStreamingProviderWarnsWhenStreamingWanted: the anthropic provider
+// does not implement llm.Streamer, so on a real TTY with output.stream on
+// (the default) runReview must log a Warn-level heads-up to stderr and then
+// produce the full review via the buffered Complete path — with exactly one
+// HTTP request (no streaming attempt).
+func TestNonStreamingProviderWarnsWhenStreamingWanted(t *testing.T) {
+	handler := &anthropicOneShotHandler{}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	dir := setupRepo(t, false)
+	env := map[string]string{"GITL_API_KEY": "sk-ant-fake-e2e"}
+
+	// The warning goes through slog, whose handler (built in setupLogging)
+	// writes to the real os.Stderr — capture it at the process level, same
+	// trick as TestChangelogRequiredCategoryWarns.
+	var out string
+	var err error
+	osStderr := captureStderr(t, func() {
+		out, err = runReviewOnPTY(t, dir, env,
+			"HEAD~1..HEAD", "--provider", "anthropic", "--base-url", srv.URL, "--no-cache")
+	})
+
+	if err != nil {
+		t.Fatalf("review must succeed via the buffered path, got: %v", err)
+	}
+
+	// 1. The Warn-level fallback notice reached stderr.
+	if !strings.Contains(osStderr, nonStreamerWarning) {
+		t.Errorf("stderr missing %q warning:\n%s", nonStreamerWarning, osStderr)
+	}
+	if !strings.Contains(osStderr, "anthropic") {
+		t.Errorf("warning should name the provider (anthropic):\n%s", osStderr)
+	}
+
+	// 2. The terminal received the full buffered review.
+	if !strings.Contains(out, anthropicReviewBody) {
+		t.Errorf("terminal output missing the review body:\n%s", out)
+	}
+	if !strings.Contains(out, "**Risk:**") || !strings.Contains(out, "LOW") {
+		t.Errorf("terminal output missing the rendered LOW risk header:\n%s", out)
+	}
+
+	// 3. Exactly one request — the buffered Complete; no streaming attempt.
+	if got := handler.calls.Load(); got != 1 {
+		t.Errorf("server saw %d request(s), want exactly 1 (buffered Complete only)", got)
+	}
+}
+
+// TestNonStreamingProviderNoWarningWhenStreamOff protects the invariant that
+// the warning only fires when streaming was actually expected: same anthropic
+// provider on the same TTY, but output.stream: false — no warning on stderr,
+// review still rendered.
+func TestNonStreamingProviderNoWarningWhenStreamOff(t *testing.T) {
+	handler := &anthropicOneShotHandler{}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	dir := setupRepo(t, false)
+	if err := os.WriteFile(filepath.Join(dir, ".gitl.yaml"), []byte("output:\n  stream: false\n"), 0o600); err != nil {
+		t.Fatalf("write .gitl.yaml: %v", err)
+	}
+	env := map[string]string{"GITL_API_KEY": "sk-ant-fake-e2e"}
+
+	var out string
+	var err error
+	osStderr := captureStderr(t, func() {
+		out, err = runReviewOnPTY(t, dir, env,
+			"HEAD~1..HEAD", "--provider", "anthropic", "--base-url", srv.URL, "--no-cache")
+	})
+
+	if err != nil {
+		t.Fatalf("review must succeed, got: %v", err)
+	}
+	if strings.Contains(osStderr, nonStreamerWarning) {
+		t.Errorf("no warning expected when output.stream is false, stderr:\n%s", osStderr)
+	}
+	if !strings.Contains(out, anthropicReviewBody) {
+		t.Errorf("terminal output missing the review body:\n%s", out)
+	}
+}
