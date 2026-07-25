@@ -482,3 +482,133 @@ func TestDigestRepoAbsolutePathLeftUntouched(t *testing.T) {
 		t.Errorf("Digest.Repos[0].Path = %q, want unchanged %q", got, absPath)
 	}
 }
+
+// TestRepoRootConfigMergedBeneathCwdConfig is the core Batch-4 regression
+// test: with a .gitl.yaml at BOTH the git repo root (RepoRootDir) and the
+// cwd-based dir (RepoDir), both must merge — the cwd file winning key-by-key,
+// while keys only the root file sets (the committed team policy, including
+// the secret-exclusion globs) still apply.
+func TestRepoRootConfigMergedBeneathCwdConfig(t *testing.T) {
+	rootDir := t.TempDir()
+	subDir := filepath.Join(rootDir, "src", "internal")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	personalPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+
+	writeFile(t, filepath.Join(rootDir, ".gitl.yaml"),
+		"policy:\n  fail_on: high\n  exclude_globs:\n    - \"secrets/**\"\nllm:\n  model: root-model\n")
+	writeFile(t, filepath.Join(subDir, ".gitl.yaml"),
+		"llm:\n  model: sub-model\n")
+
+	cfg, err := Load(Options{RepoDir: subDir, RepoRootDir: rootDir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LLM.Model != "sub-model" {
+		t.Errorf("llm.model = %q, want sub-model (cwd config wins on conflict)", cfg.LLM.Model)
+	}
+	if cfg.Policy.FailOn != "high" {
+		t.Errorf("policy.fail_on = %q, want high (root-only key must survive the merge)", cfg.Policy.FailOn)
+	}
+	if !slices.Equal(cfg.Policy.ExcludeGlobs, []string{"secrets/**"}) {
+		t.Errorf("policy.exclude_globs = %v, want [secrets/**] (root-only key)", cfg.Policy.ExcludeGlobs)
+	}
+}
+
+// TestRepoRootWithoutRootConfig: RepoRootDir points at a git root with NO
+// .gitl.yaml — the cwd config must apply exactly as in the single-dir case,
+// with no error from the missing root file.
+func TestRepoRootWithoutRootConfig(t *testing.T) {
+	rootDir := t.TempDir()
+	subDir := filepath.Join(rootDir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	personalPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	writeFile(t, filepath.Join(subDir, ".gitl.yaml"), "policy:\n  fail_on: medium\n")
+
+	cfg, err := Load(Options{RepoDir: subDir, RepoRootDir: rootDir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Policy.FailOn != "medium" {
+		t.Errorf("policy.fail_on = %q, want medium (cwd config)", cfg.Policy.FailOn)
+	}
+}
+
+// TestRepoRootNoConfigAnywhere: neither the root nor the cwd dir has a
+// .gitl.yaml — Load must still succeed with pure defaults (the existing
+// missing-file leniency must survive the second repo layer).
+func TestRepoRootNoConfigAnywhere(t *testing.T) {
+	cfg, err := Load(Options{
+		RepoDir:      t.TempDir(),
+		RepoRootDir:  t.TempDir(),
+		PersonalPath: filepath.Join(t.TempDir(), "does-not-exist.yaml"),
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Policy.FailOn != "never" {
+		t.Errorf("policy.fail_on = %q, want the never default", cfg.Policy.FailOn)
+	}
+}
+
+// TestRepoRootSameAsRepoDir: when the discovered root IS the cwd dir (running
+// gitl from the repo root — the common case), the single file must merge once
+// and behave exactly as before RepoRootDir existed.
+func TestRepoRootSameAsRepoDir(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	writeFile(t, filepath.Join(dir, ".gitl.yaml"), "policy:\n  fail_on: low\n")
+
+	cfg, err := Load(Options{RepoDir: dir, RepoRootDir: dir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Policy.FailOn != "low" {
+		t.Errorf("policy.fail_on = %q, want low", cfg.Policy.FailOn)
+	}
+}
+
+// TestDigestReposResolvedAgainstDeclaringDir: with two repo-level configs,
+// relative digest.repos paths must resolve against the directory of the file
+// that actually declared the WINNING list (lists replace wholesale on merge),
+// not blindly against the cwd — the resolveDigestRepoPaths §10.4 promise.
+func TestDigestReposResolvedAgainstDeclaringDir(t *testing.T) {
+	rootDir := t.TempDir()
+	subDir := filepath.Join(rootDir, "sub")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	personalPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+
+	// Declared ONLY at the root → resolved against rootDir, not subDir.
+	writeFile(t, filepath.Join(rootDir, ".gitl.yaml"), "digest:\n  repos:\n    - path: \"../other-repo\"\n")
+	writeFile(t, filepath.Join(subDir, ".gitl.yaml"), "policy:\n  fail_on: low\n")
+
+	cfg, err := Load(Options{RepoDir: subDir, RepoRootDir: rootDir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Digest.Repos) != 1 {
+		t.Fatalf("Digest.Repos = %+v, want exactly 1 entry", cfg.Digest.Repos)
+	}
+	if want := filepath.Join(rootDir, "../other-repo"); cfg.Digest.Repos[0].Path != want {
+		t.Errorf("Digest.Repos[0].Path = %q, want %q (resolved against the declaring ROOT dir)", cfg.Digest.Repos[0].Path, want)
+	}
+
+	// Now the sub config declares its own list → it wins wholesale and
+	// resolves against subDir.
+	writeFile(t, filepath.Join(subDir, ".gitl.yaml"), "digest:\n  repos:\n    - path: \"../nested-repo\"\n")
+	cfg, err = Load(Options{RepoDir: subDir, RepoRootDir: rootDir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if len(cfg.Digest.Repos) != 1 {
+		t.Fatalf("Digest.Repos = %+v, want exactly 1 entry (cwd list replaces wholesale)", cfg.Digest.Repos)
+	}
+	if want := filepath.Join(subDir, "../nested-repo"); cfg.Digest.Repos[0].Path != want {
+		t.Errorf("Digest.Repos[0].Path = %q, want %q (resolved against the declaring CWD dir)", cfg.Digest.Repos[0].Path, want)
+	}
+}

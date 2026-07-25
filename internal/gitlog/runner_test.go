@@ -529,3 +529,74 @@ func TestRunnerDiffNonASCIIPathUnquoted(t *testing.T) {
 		t.Errorf("DiffStaged header not unquoted UTF-8; want %q in:\n%s", wantHeader, staged)
 	}
 }
+
+// TestRunnerTopLevel: TopLevel must return the absolute working-tree root both
+// when the Runner is rooted at the repo root itself AND when rooted at a
+// nested subdirectory (git walks up to .git) — the load-bearing property that
+// lets config discovery find a committed root-level .gitl.yaml from anywhere
+// inside the repo. Outside any repo it must error, never guess.
+func TestRunnerTopLevel(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := t.TempDir()
+	runTestGit(t, dir, "init", "-q", "-b", "main")
+	writeTestFile(t, dir, "a.txt", "one\n")
+	runTestGit(t, dir, "add", ".")
+	runTestGit(t, dir, "commit", "-q", "-m", "feat: initial file")
+
+	// git resolves symlinks in --show-toplevel output (e.g. /tmp vs
+	// /private/tmp on macOS), so compare symlink-resolved paths on both sides.
+	wantRoot, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(%q): %v", dir, err)
+	}
+	ctx := context.Background()
+
+	resolve := func(runner *Runner) string {
+		t.Helper()
+		got, err := runner.TopLevel(ctx)
+		if err != nil {
+			t.Fatalf("TopLevel: %v", err)
+		}
+		if !filepath.IsAbs(got) {
+			t.Fatalf("TopLevel = %q, want an absolute path", got)
+		}
+		resolved, err := filepath.EvalSymlinks(got)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q): %v", got, err)
+		}
+		return resolved
+	}
+
+	rootRunner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	if got := resolve(rootRunner); got != wantRoot {
+		t.Errorf("TopLevel from repo root = %q, want %q", got, wantRoot)
+	}
+
+	// From a nested subdirectory: still the OUTER repo root.
+	sub := filepath.Join(dir, "src", "internal")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	subRunner, err := NewRunner(sub)
+	if err != nil {
+		t.Fatalf("NewRunner(sub): %v", err)
+	}
+	if got := resolve(subRunner); got != wantRoot {
+		t.Errorf("TopLevel from subdirectory = %q, want %q", got, wantRoot)
+	}
+
+	// Outside any git repository: an error, so callers fall back to cwd-only
+	// config discovery.
+	outside, err := NewRunner(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewRunner(outside): %v", err)
+	}
+	if got, err := outside.TopLevel(ctx); err == nil {
+		t.Errorf("TopLevel outside a repo = %q, want error", got)
+	}
+}

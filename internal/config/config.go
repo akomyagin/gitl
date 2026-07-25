@@ -1,7 +1,8 @@
 // Package config loads and validates gitl configuration.
 //
-// Two config levels are merged by priority
-// flag > env > .gitl.yaml (repo, cwd) > ~/.config/gitl/config.yaml (personal),
+// Config levels are merged by priority
+// flag > env > .gitl.yaml (cwd) > .gitl.yaml (git repo root, when the cwd is a
+// subdirectory of a repo) > ~/.config/gitl/config.yaml (personal),
 // via a per-call viper instance → struct Config. The personal path comes from
 // os.UserConfigDir() (never a hardcoded ~/.config; on Windows → %AppData%\gitl).
 // An empty api_key selects offline mode for providers that require a key (a
@@ -152,6 +153,15 @@ type Options struct {
 	// RepoDir is the directory searched for the repo-level ".gitl.yaml".
 	// Empty means the current working directory.
 	RepoDir string
+	// RepoRootDir, when non-empty, is an additional directory searched for a
+	// repo-level ".gitl.yaml" — in practice the git repository root discovered
+	// via `git rev-parse --show-toplevel`. It is merged BEFORE RepoDir (lower
+	// priority), so when the user runs gitl from a subdirectory the committed
+	// root config (team policy, exclude_globs) applies while a subdirectory
+	// .gitl.yaml still overrides it key-by-key. When it resolves to the same
+	// directory as RepoDir, or is empty (root discovery failed — not a git
+	// repo, git missing), behavior is identical to the single-RepoDir case.
+	RepoRootDir string
 	// PersonalPath overrides the personal config file path. Empty means
 	// "<os.UserConfigDir()>/gitl/config.yaml".
 	PersonalPath string
@@ -215,7 +225,8 @@ func PersonalConfigPath() (string, error) {
 // Load builds the merged configuration for one invocation.
 //
 // Priority (lowest → highest): built-in defaults → personal config file →
-// repo-level .gitl.yaml → environment (GITL_* / GITL_API_KEY) → flags. A
+// repo-root .gitl.yaml (RepoRootDir, when set and distinct) → cwd-level
+// .gitl.yaml (RepoDir) → environment (GITL_* / GITL_API_KEY) → flags. A
 // fresh viper instance is used per call so tests never share global state.
 //
 // Missing config files are not an error — the file layers are simply skipped.
@@ -252,13 +263,31 @@ func Load(opts Options) (*Config, error) {
 		return nil, err
 	}
 
-	// Repo-level .gitl.yaml (higher priority than personal — merged last).
+	// Repo-level .gitl.yaml layers (higher priority than personal). The git
+	// repository root (if known and distinct) is merged FIRST, then the
+	// cwd-based dir — viper's last-merge-wins gives the cwd config priority
+	// key-by-key, mirroring the personal→repo layering above.
 	repoDir := opts.RepoDir
 	if repoDir == "" {
 		repoDir = "."
 	}
-	if err := mergeFile(v, filepath.Join(repoDir, ".gitl.yaml")); err != nil {
-		return nil, err
+	repoDirs := []string{repoDir}
+	if opts.RepoRootDir != "" && !sameDir(opts.RepoRootDir, repoDir) {
+		repoDirs = []string{opts.RepoRootDir, repoDir}
+	}
+	// digestBaseDir is the directory containing the .gitl.yaml whose
+	// digest.repos list won the merge (lists replace wholesale, so the winner
+	// is exactly the LAST merged file that declares the key). Defaults to
+	// repoDir when no file declares it — matching prior behavior.
+	digestBaseDir := repoDir
+	for _, dir := range repoDirs {
+		cfgPath := filepath.Join(dir, ".gitl.yaml")
+		if err := mergeFile(v, cfgPath); err != nil {
+			return nil, err
+		}
+		if declaresDigestRepos(cfgPath) {
+			digestBaseDir = dir
+		}
 	}
 
 	// Flags win over everything, but only when explicitly set by the user.
@@ -276,8 +305,44 @@ func Load(opts Options) (*Config, error) {
 		return nil, err
 	}
 	cfg.applyProviderBaseURL()
-	cfg.resolveDigestRepoPaths(repoDir)
+	cfg.resolveDigestRepoPaths(digestBaseDir)
 	return &cfg, nil
+}
+
+// sameDir reports whether a and b refer to the same directory. Prefers inode
+// identity (os.SameFile) so symlinked paths (e.g. /tmp vs /private/tmp) still
+// compare equal; falls back to cleaned absolute-path comparison when either
+// stat fails. Best-effort: a false negative only merges the same .gitl.yaml
+// twice, which is harmless (idempotent).
+func sameDir(a, b string) bool {
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	if errA == nil && errB == nil {
+		return os.SameFile(ia, ib)
+	}
+	aa, errA := filepath.Abs(a)
+	bb, errB := filepath.Abs(b)
+	return errA == nil && errB == nil && aa == bb
+}
+
+// declaresDigestRepos reports whether the YAML file at path exists, parses,
+// and declares a digest.repos key. Used to attribute the winning digest.repos
+// list to the directory of the file that actually declared it, keeping the
+// resolveDigestRepoPaths promise (§10.4) accurate now that TWO repo-level
+// files can be merged. Read errors are treated as "not declared" — mergeFile
+// already surfaced any real parse problem.
+func declaresDigestRepos(path string) bool {
+	f, err := os.Open(path) //nolint:gosec // path is derived from config discovery, not user input
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	sub := viper.NewWithOptions(viper.KeyDelimiter("."))
+	sub.SetConfigType("yaml")
+	if err := sub.ReadConfig(f); err != nil {
+		return false
+	}
+	return sub.IsSet("digest.repos")
 }
 
 // applyProviderBaseURL fills in llm.base_url when the merged config left it
@@ -304,9 +369,10 @@ func (c *Config) applyProviderBaseURL() {
 }
 
 // resolveDigestRepoPaths makes every digest.repos[].path absolute relative to
-// repoDir — the directory containing the repo-level .gitl.yaml that declared
-// it (or the current working directory when no .gitl.yaml was found), per
-// docs/TECHNICAL_PLAN.md §10.4. Already-absolute paths are left untouched.
+// repoDir — the directory containing the repo-level .gitl.yaml whose
+// digest.repos list won the merge (or the current working directory when no
+// .gitl.yaml declares one), per docs/TECHNICAL_PLAN.md §10.4.
+// Already-absolute paths are left untouched.
 func (c *Config) resolveDigestRepoPaths(repoDir string) {
 	for i, ref := range c.Digest.Repos {
 		if ref.Path == "" || filepath.IsAbs(ref.Path) {
