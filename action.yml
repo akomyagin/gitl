@@ -231,9 +231,16 @@ runs:
             --jq '[.[] | select(.body | startswith("<!-- gitl-review -->"))] | last | .id // empty')
 
           if [ -n "$EXISTING_ID" ]; then
+            # JSON-encode the body with jq (raw slurp) and PATCH via --input,
+            # same pattern as the Gitea branch above (which is a separate
+            # if-arm, so its comment.json does not exist here): --input sends
+            # the body as a guaranteed raw string with trailing newlines
+            # intact, whereas --field body="$(cat ...)" both strips trailing
+            # newlines (command substitution) and type-coerces the value.
+            jq -Rs '{body: .}' comment.md > comment.json
             gh api "repos/${GITHUB_REPOSITORY}/issues/comments/${EXISTING_ID}" \
               --method PATCH \
-              --field body="$(cat comment.md)"
+              --input comment.json
           else
             gh pr comment "$GITL_PR_NUMBER" --body-file comment.md
           fi
