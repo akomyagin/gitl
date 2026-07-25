@@ -179,6 +179,115 @@ func TestParseLogErrors(t *testing.T) {
 	}
 }
 
+// TestParseNameStatusNewlineHardening covers the defensive handling of
+// special characters in --name-status path fields: git-quoted paths (the form
+// git emits for filenames containing a literal newline, tab, quote or
+// backslash even with core.quotepath=false) are decoded into raw paths, plain
+// non-ASCII UTF-8 paths pass through untouched, and a literal newline that
+// arrives UNquoted mis-splits the line and raises an explicit truncated
+// error instead of silently corrupting the path.
+func TestParseNameStatusNewlineHardening(t *testing.T) {
+	t.Parallel()
+
+	const (
+		hashA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+		dateA = "2026-07-01T10:00:00+03:00"
+	)
+
+	tests := []struct {
+		name string
+		in   string
+		want []Commit
+	}{
+		{
+			// Raw git bytes for a filename containing a real newline:
+			// M TAB "weird\nname.txt" — backslash-n inside quotes.
+			name: "quoted path with escaped newline decodes to a real newline",
+			in: header(hashA, "Alice", dateA, "feat: odd file", "") +
+				"\nM\t\"weird\\nname.txt\"\n",
+			want: []Commit{{
+				Hash: hashA, Author: "Alice", Date: mustDate(t, dateA),
+				Subject: "feat: odd file",
+				Files:   []FileChange{{Status: "M", Path: "weird\nname.txt"}},
+			}},
+		},
+		{
+			// The tab inside the name is the escape sequence \t (backslash,
+			// then 't') in the raw line, so the TAB split still sees exactly
+			// two fields; decoding happens after the split.
+			name: "quoted path with escaped tab does not break the TAB split",
+			in: header(hashA, "Alice", dateA, "feat: tabbed file", "") +
+				"\nA\t\"tab\\there.txt\"\n",
+			want: []Commit{{
+				Hash: hashA, Author: "Alice", Date: mustDate(t, dateA),
+				Subject: "feat: tabbed file",
+				Files:   []FileChange{{Status: "A", Path: "tab\there.txt"}},
+			}},
+		},
+		{
+			name: "rename with both paths quoted decodes old and new",
+			in: header(hashA, "Alice", dateA, "refactor: odd rename", "") +
+				"\nR100\t\"old\\nx\"\t\"new\\ny\"\n",
+			want: []Commit{{
+				Hash: hashA, Author: "Alice", Date: mustDate(t, dateA),
+				Subject: "refactor: odd rename",
+				Files:   []FileChange{{Status: "R100", Old: "old\nx", Path: "new\ny"}},
+			}},
+		},
+		{
+			// With core.quotepath=false on the runner side, non-ASCII paths
+			// arrive as raw UTF-8, no quotes — parsed exactly as before.
+			name: "non-ASCII path arrives unquoted and passes through",
+			in: header(hashA, "Alice", dateA, "docs: cyrillic file", "") +
+				"\nM\tдокумент.txt\n",
+			want: []Commit{{
+				Hash: hashA, Author: "Alice", Date: mustDate(t, dateA),
+				Subject: "docs: cyrillic file",
+				Files:   []FileChange{{Status: "M", Path: "документ.txt"}},
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseLog(tt.in)
+			if err != nil {
+				t.Fatalf("ParseLog() error = %v", err)
+			}
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("ParseLog() mismatch:\n got: %#v\nwant: %#v", got, tt.want)
+			}
+		})
+	}
+
+	t.Run("literal unquoted newline mis-splits into an explicit truncated error", func(t *testing.T) {
+		t.Parallel()
+		// A literal (unquoted, unescaped) newline inside the filename
+		// physically breaks one entry into two lines; the second fragment has
+		// no TAB, fails the STATUS\tpath grammar and must raise an error. The
+		// fragment is long garbage to prove the message is truncated, not
+		// inflated proportionally to the input.
+		garbage := strings.Repeat("x", 500)
+		in := header(hashA, "Alice", dateA, "subj", "") +
+			"\nM\tbroken\n" + garbage + "\n"
+		_, err := ParseLog(in)
+		if err == nil {
+			t.Fatalf("ParseLog() expected error for mis-split name-status entry, got nil")
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, "malformed name-status line") {
+			t.Errorf("error %q does not mention a malformed name-status line", msg)
+		}
+		if !strings.Contains(msg, "...") {
+			t.Errorf("error %q does not look truncated (no ellipsis)", msg)
+		}
+		if len(msg) > 300 {
+			t.Errorf("error message length %d exceeds the truncation bound: %q", len(msg), msg)
+		}
+	})
+}
+
 // TestParseLogTreatsOldSeparatorsAsBodyText is a regression test for the
 // separator-injection vulnerability: the previous format used \x1f/\x1e as
 // delimiters, but git happily stores those bytes verbatim in a commit message

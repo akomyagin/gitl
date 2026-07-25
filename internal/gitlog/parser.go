@@ -105,6 +105,16 @@ func splitHead(head string) (nsBlock, hash string) {
 
 // parseNameStatus parses a --name-status block: lines like "M\tpath",
 // "A\tpath", "D\tpath" and "R100\told\tnew" (renames/copies carry two paths).
+//
+// Path fields may arrive in git's quoted form (`"..."` with C-style escapes)
+// when the filename contains characters git always quotes regardless of
+// core.quotePath — a literal newline, tab, double quote or backslash. Those
+// are decoded via unquotePathField AFTER the TAB split (escapes like \t and
+// \n are backslash sequences in the raw line, so they never confuse the
+// split). A filename with a literal newline that somehow arrives UNquoted
+// physically breaks the line in two; the fragment then fails the STATUS\tpath
+// grammar below and raises an explicit truncated error — never a silently
+// corrupted path.
 func parseNameStatus(block string) ([]FileChange, error) {
 	var files []FileChange
 	for _, line := range strings.Split(block, "\n") {
@@ -117,17 +127,29 @@ func parseNameStatus(block string) ([]FileChange, error) {
 		switch {
 		case strings.HasPrefix(status, "R"), strings.HasPrefix(status, "C"):
 			if len(parts) != 3 {
-				return nil, fmt.Errorf("parse git log: malformed rename/copy line %q", line)
+				return nil, fmt.Errorf("parse git log: malformed rename/copy line %q", truncateForError(line))
 			}
-			files = append(files, FileChange{Status: status, Old: parts[1], Path: parts[2]})
+			files = append(files, FileChange{Status: status, Old: unquotePathField(parts[1]), Path: unquotePathField(parts[2])})
 		default:
 			if len(parts) != 2 {
-				return nil, fmt.Errorf("parse git log: malformed name-status line %q", line)
+				return nil, fmt.Errorf("parse git log: malformed name-status line %q", truncateForError(line))
 			}
-			files = append(files, FileChange{Status: status, Path: parts[1]})
+			files = append(files, FileChange{Status: status, Path: unquotePathField(parts[1])})
 		}
 	}
 	return files, nil
+}
+
+// unquotePathField decodes one --name-status path field: if it is in git's
+// quoted form (wrapped in double quotes), the C-style escapes are decoded via
+// unquoteGitPath (the same quote.c-dialect decoder diffparse.go uses for
+// quoted diff headers); otherwise the field is already a raw path and is
+// returned as-is.
+func unquotePathField(s string) string {
+	if len(s) >= 2 && s[0] == '"' && s[len(s)-1] == '"' {
+		return unquoteGitPath(s[1 : len(s)-1])
+	}
+	return s
 }
 
 // ParseNumstat parses the output of

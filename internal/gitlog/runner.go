@@ -35,10 +35,19 @@ import (
 // NULs that the run greedily swallowed, losing two fields and failing the
 // whole range on one --allow-empty-message commit.)
 //
-// --name-status deliberately stays in its default TAB/LF mode (no -z): its
-// block contains no NUL bytes, so it appears exclusively as part of the
-// "head" token of the following record (glued to the next commit's hash
-// with no separator), which splitHead takes apart.
+// --name-status deliberately stays in its default TAB/LF mode (no -z): -z
+// would separate name-status entries with NUL bytes that collide with this
+// format's 5-NUL field grammar, so the block appears exclusively as part of
+// the "head" token of the following record (glued to the next commit's hash
+// with no separator), which splitHead takes apart. quotePath, however, IS
+// disabled (noQuotePath on the Log/LogSince invocations), so paths arrive as
+// raw UTF-8; the residual ambiguity of a LITERAL newline inside a filename is
+// handled defensively in parseNameStatus — a mis-split line fails the
+// STATUS\tpath grammar and raises an explicit truncated error, never silent
+// corruption. A two-process scheme (metadata pass + separate `-z` name-status
+// pass) would remove the ambiguity entirely but was deliberately rejected: it
+// would roll back the PR #63 "fewer git subprocesses" optimization for a
+// Low-severity edge case.
 const logFormat = "--pretty=format:%H%x00%an%x00%aI%x00%s%x00%b%x00"
 
 // Runner provides git history by shelling out to the system `git` binary. It
@@ -62,7 +71,9 @@ func NewRunner(dir string) (*Runner, error) {
 // Log runs `git log` over revRange with the control-separator format plus
 // --name-status and parses the output into Commits.
 func (r *Runner) Log(ctx context.Context, revRange string) ([]Commit, error) {
-	out, err := r.run(ctx, "log", logFormat, "--name-status", "--end-of-options", revRange)
+	args := append([]string{}, noQuotePath...)
+	args = append(args, "log", logFormat, "--name-status", "--end-of-options", revRange)
+	out, err := r.run(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -73,7 +84,9 @@ func (r *Runner) Log(ctx context.Context, revRange string) ([]Commit, error) {
 // diff headers (`diff --git "a/\320..." "b/\320..."` → plain UTF-8 paths).
 // Quoting is git's DEFAULT, and quoted headers used to defeat exclude-glob
 // matching and DiffPaths extraction. Passed as `-c core.quotepath=false`
-// BEFORE the subcommand on every diff-producing invocation. Defense in depth:
+// BEFORE the subcommand on every diff-producing invocation and on
+// --name-status log invocations, so name-status paths arrive as raw UTF-8
+// rather than git-escaped quoted strings. Defense in depth:
 // DiffSectionPath still decodes quoted headers for diff text that originated
 // elsewhere — this flag just keeps our own output unquoted at the source.
 var noQuotePath = []string{"-c", "core.quotepath=false"}
@@ -111,7 +124,9 @@ func (r *Runner) LatestTag(ctx context.Context) (string, error) {
 // checkout), matching every other command's branch-agnostic behavior.
 func (r *Runner) LogSince(ctx context.Context, since time.Time) ([]Commit, error) {
 	arg := "--since=" + since.UTC().Format(time.RFC3339)
-	out, err := r.run(ctx, "log", logFormat, "--name-status", arg)
+	args := append([]string{}, noQuotePath...)
+	args = append(args, "log", logFormat, "--name-status", arg)
+	out, err := r.run(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
