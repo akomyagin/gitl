@@ -331,6 +331,66 @@ func TestValidateNormalizesFailOnCase(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsBadOutputFormat proves a misspelled output.format is a
+// loud config-load error (naming the valid options) instead of being caught
+// only inside internal/render, after a paid LLM call already happened.
+func TestValidateRejectsBadOutputFormat(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "output:\n  format: yaml\n")
+	_, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err == nil {
+		t.Fatal("expected error for output.format = \"yaml\"")
+	}
+	if !strings.Contains(err.Error(), "md|text|json") {
+		t.Errorf("error %q does not mention the valid options md|text|json", err)
+	}
+}
+
+// TestValidateNormalizesOutputFormatCase proves a mixed-case output.format is
+// accepted and normalized to lowercase, mirroring the fail_on pattern.
+func TestValidateNormalizesOutputFormatCase(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "output:\n  format: MD\n")
+	cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Output.Format != "md" {
+		t.Errorf("output.format = %q, want normalized \"md\"", cfg.Output.Format)
+	}
+}
+
+// TestValidateAcceptsEmptyOutputFormat proves an explicitly empty output.format
+// is a legal "unset" value (render defaults it to md), and an absent key keeps
+// the built-in "md" default.
+func TestValidateAcceptsEmptyOutputFormat(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "output:\n  format: \"\"\n")
+	cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v (empty output.format must be legal)", err)
+	}
+	if cfg.Output.Format != "" {
+		t.Errorf("output.format = %q, want \"\" (explicitly empty)", cfg.Output.Format)
+	}
+
+	// Key entirely absent → built-in default survives validation.
+	absentDir := t.TempDir()
+	cfg, err = Load(Options{
+		RepoDir:      absentDir,
+		PersonalPath: filepath.Join(absentDir, "does-not-exist.yaml"),
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v (absent output.format must be legal)", err)
+	}
+	if cfg.Output.Format != "md" {
+		t.Errorf("output.format = %q, want the \"md\" default", cfg.Output.Format)
+	}
+}
+
 // TestValidateRejectsMalformedExcludeGlob proves a syntactically invalid glob
 // pattern (an unterminated "[") fails config-load with a clear error, instead
 // of silently matching nothing on every file forever (matchesAnyGlob in

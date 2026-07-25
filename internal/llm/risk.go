@@ -170,8 +170,12 @@ func ValidFailOnLevel(s string) bool {
 }
 
 // fencedBlockRe matches a fenced code block, capturing its language tag and
-// body. It is tolerant of surrounding whitespace and multi-line bodies.
-var fencedBlockRe = regexp.MustCompile("(?s)```([a-zA-Z0-9_-]*)\\r?\\n(.*?)```")
+// body. It is tolerant of surrounding whitespace and multi-line bodies,
+// including trailing spaces/tabs after the language tag (e.g. "```risk \n" —
+// models emit those occasionally). Matching a stray non-risk block loosely is
+// safe: ParseRisk only accepts a block whose tag is exactly "risk" AND whose
+// body parses as JSON with a valid level.
+var fencedBlockRe = regexp.MustCompile("(?s)```([a-zA-Z0-9_-]*)[ \\t]*\\r?\\n(.*?)```")
 
 // riskPayload is the one-line JSON object the model emits inside the risk block.
 type riskPayload struct {

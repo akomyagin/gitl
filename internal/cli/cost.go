@@ -17,7 +17,7 @@ import (
 func resolvePricing(errOut io.Writer, cfg *config.Config) (pricing llm.Pricing, ok bool) {
 	// Ollama is self-hosted: always free, guard/estimate skipped without a
 	// warning (the expected free path).
-	if cfg.LLM.Provider == llm.ProviderOllama {
+	if llm.ProviderIsFree(cfg.LLM.Provider) {
 		return llm.Pricing{}, true
 	}
 
@@ -65,7 +65,7 @@ func printDryRun(out, errOut io.Writer, cfg *config.Config, promptText string) e
 		return nil
 	}
 
-	if cfg.LLM.Provider == llm.ProviderOllama {
+	if llm.ProviderIsFree(cfg.LLM.Provider) {
 		fmt.Fprintf(out, "provider ollama (%s) — self-hosted, no API cost\n", cfg.LLM.Model)
 		return nil
 	}
@@ -93,7 +93,7 @@ func printDryRun(out, errOut io.Writer, cfg *config.Config, promptText string) e
 func costGuard(errOut io.Writer, cfg *config.Config, promptText string) error {
 	// Ollama / unknown-pricing paths are free/permissive.
 	pricing, ok := resolvePricing(errOut, cfg)
-	if !ok || cfg.LLM.Provider == llm.ProviderOllama {
+	if !ok || llm.ProviderIsFree(cfg.LLM.Provider) {
 		return nil
 	}
 
