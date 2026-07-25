@@ -1,6 +1,7 @@
 // Package gitlog reads and parses git history via the system `git` binary
-// (os/exec), hidden behind the Source interface so a go-git backend could
-// replace it without touching commands (see docs/TECHNICAL_PLAN.md §4).
+// (os/exec). All git invocations are concentrated in the Runner type so a
+// go-git backend could replace it without touching commands (see
+// docs/TECHNICAL_PLAN.md §4).
 package gitlog
 
 import (
@@ -40,59 +41,14 @@ import (
 // with no separator), which splitHead takes apart.
 const logFormat = "--pretty=format:%H%x00%an%x00%aI%x00%s%x00%b%x00"
 
-// Source provides git history for a revision range. It exists so that the
-// os/exec-based Runner could later be swapped for a go-git implementation
-// without touching command code.
-type Source interface {
-	// Log returns the commits in the given revision range (e.g. "HEAD~5..HEAD").
-	Log(ctx context.Context, revRange string) ([]Commit, error)
-	// Diff returns the unified diff text for the given revision range.
-	Diff(ctx context.Context, revRange string) (string, error)
-	// DiffStaged returns the unified diff of staged (indexed, not yet
-	// committed) changes, like `git diff --cached`. An empty string means
-	// nothing is staged.
-	DiffStaged(ctx context.Context) (string, error)
-	// LatestTag returns the most recent reachable tag from HEAD (like
-	// `git describe --tags --abbrev=0`). An empty string with a nil error
-	// means no tags exist — a legitimate result, not a failure (see
-	// docs/TECHNICAL_PLAN.md §9.5).
-	LatestTag(ctx context.Context) (string, error)
-	// LogSince returns the commits reachable from HEAD committed after since
-	// (like `git log --since=<RFC3339>`).
-	LogSince(ctx context.Context, since time.Time) ([]Commit, error)
-	// DiffForCommit returns the unified diff text introduced by a single
-	// commit (like `git show --format= <hash>`).
-	DiffForCommit(ctx context.Context, hash string) (string, error)
-	// ObjectExists reports whether a git object (commit SHA) is available
-	// locally without a network call — used for a best-effort fetch (skip
-	// fetching what's already there, which also keeps PR review testable
-	// without real git fetches).
-	ObjectExists(ctx context.Context, sha string) bool
-	// FetchRef runs `git fetch --no-tags <remote> <ref>` for a remote ref/SHA
-	// not yet available locally (e.g. a PR head or a base commit needed for
-	// a merge-base diff).
-	FetchRef(ctx context.Context, remote, ref string) error
-	// RemoteNames returns the configured remote names (like `git remote`),
-	// one per line of git output. An empty slice with a nil error means the
-	// repository has no remotes.
-	RemoteNames(ctx context.Context) ([]string, error)
-	// RemoteURL returns the fetch URL of the given remote (like
-	// `git remote get-url <remote>`). Errors when the remote does not exist.
-	RemoteURL(ctx context.Context, remote string) (string, error)
-	// TopLevel returns the absolute path of the working-tree root (like
-	// `git rev-parse --show-toplevel`) — used to find a repo-level .gitl.yaml
-	// even when gitl runs from a subdirectory. Errors outside a git work tree.
-	TopLevel(ctx context.Context) (string, error)
-}
-
-// Runner implements Source by shelling out to the system `git` binary.
+// Runner provides git history by shelling out to the system `git` binary. It
+// concentrates every git invocation of the project, so a go-git implementation
+// could later replace it without touching command code.
 type Runner struct {
 	// dir is the working directory for git commands; empty means the
 	// current working directory.
 	dir string
 }
-
-var _ Source = (*Runner)(nil)
 
 // NewRunner returns a Runner operating in dir (empty = current directory).
 // It fails with a friendly error if `git` is not installed in PATH.

@@ -183,6 +183,29 @@ func TestParseRisk(t *testing.T) {
 			wantOK:    true,
 			wantLevel: "high",
 		},
+		{
+			name:      "trailing space after language tag",
+			content:   "body\n\n```risk \n{\"level\": \"medium\", \"summary\": \"trailing space\"}\n```\n",
+			wantOK:    true,
+			wantLevel: "medium",
+		},
+		{
+			name:      "trailing tab after language tag",
+			content:   "body\n\n```risk\t\n{\"level\": \"low\", \"summary\": \"trailing tab\"}\n```\n",
+			wantOK:    true,
+			wantLevel: "low",
+		},
+		{
+			name:      "CRLF with trailing space after language tag",
+			content:   "body\r\n\r\n```risk \r\n{\"level\": \"high\", \"summary\": \"crlf\"}\r\n```\r\n",
+			wantOK:    true,
+			wantLevel: "high",
+		},
+		{
+			name:    "json-tagged block with trailing space still rejected",
+			content: "prose\n\n```json \n{\"level\": \"low\", \"summary\": \"JSONTAG_SPACE_MARKER\"}\n```",
+			wantOK:  false,
+		},
 	}
 
 	for _, tc := range tests {

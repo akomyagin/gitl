@@ -452,6 +452,19 @@ func (c *Config) validate() error {
 	}
 	c.Policy.FailOn = failOn
 
+	// output.format is validated here — not only inside internal/render — so a
+	// misspelled value (e.g. "jsn") fails at config-load time, BEFORE a paid
+	// LLM call. Empty is legal ("unset", render defaults to md). Normalized to
+	// lowercase, mirroring policy.fail_on above.
+	format := strings.ToLower(strings.TrimSpace(c.Output.Format))
+	switch render.Format(format) {
+	case render.FormatMarkdown, render.FormatText, render.FormatJSON, "":
+		// valid
+	default:
+		return fmt.Errorf("output.format must be one of md|text|json, got %q", c.Output.Format)
+	}
+	c.Output.Format = format
+
 	// Custom template overrides: when set, the file must exist and parse as a
 	// text/template so failures surface at config-load time rather than mid-review.
 	// Parsing registers render.TemplateFuncs() — the same FuncMap the prompt

@@ -427,3 +427,28 @@ func TestProviderRequiresKey(t *testing.T) {
 		}
 	}
 }
+
+// TestProviderIsFree: only ollama (self-hosted) has no per-token cost; every
+// other identifier — including unrecognized ones and the empty string — is
+// treated as paid, so the cost guard stays active for them.
+func TestProviderIsFree(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		provider string
+		want     bool
+	}{
+		{ProviderOllama, true},
+		{ProviderOpenAI, false},
+		{ProviderAzure, false},
+		{ProviderAnthropic, false},
+		{ProviderGemini, false},
+		{"unknown-provider", false},
+		{"", false},
+	}
+	for _, tt := range tests {
+		if got := ProviderIsFree(tt.provider); got != tt.want {
+			t.Errorf("ProviderIsFree(%q) = %v, want %v", tt.provider, got, tt.want)
+		}
+	}
+}

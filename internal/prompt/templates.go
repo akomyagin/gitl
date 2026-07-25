@@ -49,18 +49,31 @@ func BuildReviewWithTemplate(r Review, systemTemplateFile string) (system, user 
 	if systemTemplateFile == "" {
 		return defaultReviewSystem, user, nil
 	}
+	system, err = executeSystemTemplate(systemTemplateFile, r)
+	if err != nil {
+		return "", "", err
+	}
+	return system, user, nil
+}
+
+// executeSystemTemplate parses systemTemplateFile as a text/template with the
+// shared render FuncMap and executes it against data. It is the common
+// parse/execute/empty-check tail of BuildReviewWithTemplate and
+// BuildChangelogWithTemplate; an empty executed output (e.g. a template that
+// only contains {{define}} blocks) is an error, never a silent empty prompt.
+func executeSystemTemplate(systemTemplateFile string, data any) (string, error) {
 	tmpl, err := template.New(filepath.Base(systemTemplateFile)).Funcs(render.TemplateFuncs()).ParseFiles(systemTemplateFile)
 	if err != nil {
-		return "", "", fmt.Errorf("parse system template %q: %w", systemTemplateFile, err)
+		return "", fmt.Errorf("parse system template %q: %w", systemTemplateFile, err)
 	}
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, r); err != nil {
-		return "", "", fmt.Errorf("execute system template %q: %w", systemTemplateFile, err)
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return "", fmt.Errorf("execute system template %q: %w", systemTemplateFile, err)
 	}
 	if buf.Len() == 0 {
-		return "", "", fmt.Errorf("system template %q produced empty output — ensure the template has content outside {{define}} blocks", systemTemplateFile)
+		return "", fmt.Errorf("system template %q produced empty output — ensure the template has content outside {{define}} blocks", systemTemplateFile)
 	}
-	return buf.String(), user, nil
+	return buf.String(), nil
 }
 
 // buildUserMessage assembles the user message shared by BuildReview and
@@ -148,18 +161,11 @@ func BuildChangelogWithTemplate(c Changelog, systemTemplateFile string) (system,
 	if systemTemplateFile == "" {
 		return defaultChangelogSystem, user, nil
 	}
-	tmpl, err := template.New(filepath.Base(systemTemplateFile)).Funcs(render.TemplateFuncs()).ParseFiles(systemTemplateFile)
+	system, err = executeSystemTemplate(systemTemplateFile, c)
 	if err != nil {
-		return "", "", fmt.Errorf("parse system template %q: %w", systemTemplateFile, err)
+		return "", "", err
 	}
-	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, c); err != nil {
-		return "", "", fmt.Errorf("execute system template %q: %w", systemTemplateFile, err)
-	}
-	if buf.Len() == 0 {
-		return "", "", fmt.Errorf("system template %q produced empty output — ensure the template has content outside {{define}} blocks", systemTemplateFile)
-	}
-	return buf.String(), user, nil
+	return system, user, nil
 }
 
 // buildChangelogUserMessage assembles the changelog user message: the range,

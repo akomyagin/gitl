@@ -86,7 +86,7 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 
 	// Flags bound into config (see config.bindChangedFlags). Only override
 	// config when explicitly set.
-	cmd.Flags().String("provider", "", "LLM provider (openai | ollama | azure_openai | anthropic | gemini)")
+	cmd.Flags().String("provider", "", "LLM provider ("+llm.ProvidersHelp+")")
 	cmd.Flags().String("model", "", "model name")
 	cmd.Flags().String("base-url", "", "LLM API base URL")
 	cmd.Flags().String("format", "", "output format (md | text | json)")

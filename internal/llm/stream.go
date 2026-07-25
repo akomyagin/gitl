@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"strings"
 	"unicode/utf8"
@@ -253,12 +252,5 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 		return Response{}, fmt.Errorf("llm: %s stream ended with no content", c.provider)
 	}
 
-	stripped, risk, ok := ParseRisk(buf.String())
-	if !ok {
-		risk = HeuristicRisk(req.Commits, req.Diff)
-		risk.Heuristic = true
-		slog.Warn("model risk block missing or invalid; using heuristic fallback", "level", risk.Level)
-		stripped = strings.TrimRight(buf.String(), " \t\r\n") + "\n"
-	}
-	return Response{Content: stripped, Risk: risk}, nil
+	return finishWithRisk(buf.String(), req.Commits, req.Diff), nil
 }

@@ -80,6 +80,13 @@ func ProviderRequiresKey(provider string) bool {
 	return provider != ProviderOllama
 }
 
+// ProviderIsFree reports whether a provider has no per-token cost
+// (self-hosted). Mirrors ProviderRequiresKey as a per-provider trait.
+func ProviderIsFree(provider string) bool { return provider == ProviderOllama }
+
+// ProvidersHelp is the pipe-separated provider list for CLI flag help text.
+const ProvidersHelp = ProviderOpenAI + " | " + ProviderOllama + " | " + ProviderAzure + " | " + ProviderAnthropic + " | " + ProviderGemini
+
 // StatusError is a typed HTTP error carrying the status code and whether the
 // request is worth retrying. It is used with errors.As so retry classification
 // never relies on string matching.
