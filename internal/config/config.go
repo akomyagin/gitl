@@ -45,10 +45,22 @@ type Config struct {
 
 // CacheConfig controls the on-disk LLM response cache (Item 5). Enabled toggles
 // the cache; TTLHours <= 0 also disables it. Only used for network reviews —
-// offline mode never consults or writes the cache.
+// offline mode never consults or writes the cache. Remote optionally adds a
+// shared HTTP KV tier on top of the local disk cache.
 type CacheConfig struct {
-	Enabled  bool `mapstructure:"enabled"`
-	TTLHours int  `mapstructure:"ttl_hours"`
+	Enabled  bool         `mapstructure:"enabled"`
+	TTLHours int          `mapstructure:"ttl_hours"`
+	Remote   RemoteConfig `mapstructure:"remote"`
+}
+
+// RemoteConfig is the opt-in BYO remote HTTP KV cache backend. URL empty = the
+// remote tier is off (default): gitl hosts nothing; the endpoint is entirely
+// the user's. TokenEnv names an env var holding an optional bearer token (the
+// token itself is never read from a config file, mirroring GITL_API_KEY).
+type RemoteConfig struct {
+	URL       string `mapstructure:"url"`
+	TokenEnv  string `mapstructure:"token_env"`
+	TimeoutMS int    `mapstructure:"timeout_ms"`
 }
 
 // PromptConfig holds custom prompt template overrides (Item 3). When
@@ -215,6 +227,13 @@ func defaults() map[string]any {
 		"policy.required_changelog_categories":  []string{},
 		"cache.enabled":                         true,
 		"cache.ttl_hours":                       24,
+		// Registered (empty) so viper's AutomaticEnv surfaces
+		// GITL_CACHE_REMOTE_* (same quirk as the Azure/policy keys above). The
+		// bearer token itself is NOT a config key: cache.remote.token_env names
+		// ANOTHER env var that the code reads via os.Getenv at call time.
+		"cache.remote.url":        "",
+		"cache.remote.token_env":  "",
+		"cache.remote.timeout_ms": 3000,
 	}
 }
 

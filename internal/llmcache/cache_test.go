@@ -11,6 +11,14 @@ import (
 	"github.com/akomyagin/gitl/internal/llm"
 )
 
+// Compile-time proof that every backend satisfies the Cache contract.
+var (
+	_ Cache = (*diskCache)(nil)
+	_ Cache = (*remoteCache)(nil)
+	_ Cache = nopCache{}
+	_ Cache = tiered{}
+)
+
 // testKey is the baseline key used by the store (Get/Put) tests.
 func testKey() string {
 	return Key(KeyParams{Provider: "openai", Model: "gpt-4o", System: "sys", User: "usr"})

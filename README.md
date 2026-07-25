@@ -7,7 +7,8 @@ repository's git history and turns it into a structured engineering artifact via
 
 - **`gitl review <range>`** — AI review of a commit range / PR with machine-readable
   risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → non-zero exit code);
-  streams tokens to the terminal in real time; on-disk LLM response cache;
+  streams tokens to the terminal in real time; on-disk LLM response cache with an
+  optional shared remote cache for CI;
   custom system-prompt templates; `--staged` reviews staged (uncommitted) changes
   before `git commit` (also available as a [pre-commit hook](#pre-commit-hook-local)).
 - **`gitl changelog [<range>]`** — Keep a Changelog-style changelog, grouped by
@@ -202,6 +203,44 @@ cache:
 
 Cache lives in `~/.cache/gitl/review/` (XDG-compliant). Disable per-call:
 `gitl review HEAD~5..HEAD --no-cache`
+
+#### Shared remote cache (`cache.remote`) — opt-in
+
+**Opt-in, off by default, BYO-backend:** gitl never hosts a service and makes no
+network request to any cache until you configure one. Useful for CI cold starts —
+every runner starts with an empty disk, but a shared HTTP KV endpoint lets one
+runner reuse another's review of the same diff.
+
+```yaml
+cache:
+  enabled: true
+  ttl_hours: 24
+  remote:                     # opt-in shared cache for CI cold starts (off by default)
+    url: https://cache.example.com/gitl   # your endpoint; gitl hosts nothing
+    token_env: GITL_REMOTE_CACHE_TOKEN    # env var holding an optional bearer token
+    timeout_ms: 3000
+```
+
+When configured, the local disk cache stays the first tier: reads check disk,
+then the remote (a remote hit is backfilled to disk); writes go to both.
+
+The protocol is a dumb key-value store over HTTP — any static object store or
+tiny handler works:
+
+- `GET {url}/{key}` → `200` with the JSON entry body, or `404` = miss. Any other
+  status, network error, or timeout is treated as a miss.
+- `PUT {url}/{key}` with the JSON entry as the request body
+  (`Content-Type: application/json`) → any `2xx` = stored.
+- If `token_env` names an env var with a non-empty value, both requests carry
+  `Authorization: Bearer <token>`. The token itself is never read from a config
+  file (same discipline as `GITL_API_KEY`).
+- Keys are 64-character hex SHA-256 strings; values are opaque to the server.
+
+**Safety contract:** any remote failure (timeout, 5xx, unreachable endpoint)
+silently degrades to the local cache / no cache — it never fails the review.
+The stored entries contain only the model's response, keyed by an opaque hash:
+no diff and no prompt text ever reach the remote cache. Entries older than
+`ttl_hours` are ignored client-side regardless of what the server returns.
 
 ### Custom templates (`prompt.*_template_file` / `output.template_file`)
 

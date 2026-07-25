@@ -144,23 +144,24 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 	noCache, _ := cmd.Flags().GetBool("no-cache")
 	useCache := cfg.Cache.Enabled && !noCache && cfg.Cache.TTLHours > 0
 	var (
-		cache    *llmcache.Cache
+		cache    llmcache.Cache
 		cacheKey string
 	)
 	if useCache {
-		if c, cerr := llmcache.New(time.Duration(cfg.Cache.TTLHours) * time.Hour); cerr == nil {
-			cache = c
-			cacheKey = llmCacheKey(cfg, system, user)
-			if resp, ok, _ := cache.Get(cacheKey); ok {
-				if payload, pok := llm.ParseChangelogResponse(resp.Content); pok {
-					slog.Debug("llm cache hit", "key", cacheKey[:12])
-					return true, renderAIChangelog(cmd, cfg, revRange, commits, payload)
-				}
-				// A cached entry that no longer parses is treated as a miss.
-				slog.Debug("llm cache entry unparsable; ignoring", "key", cacheKey[:12])
+		cache = llmcache.Open(llmcache.Options{
+			TTL:           time.Duration(cfg.Cache.TTLHours) * time.Hour,
+			RemoteURL:     cfg.Cache.Remote.URL,
+			RemoteToken:   remoteCacheToken(cfg),
+			RemoteTimeout: time.Duration(cfg.Cache.Remote.TimeoutMS) * time.Millisecond,
+		})
+		cacheKey = llmCacheKey(cfg, system, user)
+		if resp, ok, _ := cache.Get(cacheKey); ok {
+			if payload, pok := llm.ParseChangelogResponse(resp.Content); pok {
+				slog.Debug("llm cache hit", "key", cacheKey[:12])
+				return true, renderAIChangelog(cmd, cfg, revRange, commits, payload)
 			}
-		} else {
-			slog.Debug("llm cache unavailable", "err", cerr)
+			// A cached entry that no longer parses is treated as a miss.
+			slog.Debug("llm cache entry unparsable; ignoring", "key", cacheKey[:12])
 		}
 	}
 
