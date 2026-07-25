@@ -2,6 +2,7 @@ package gitlog
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -261,5 +262,103 @@ func TestParseLogHandlesEmptySubjectAndBody(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ParseLog() mismatch:\n got: %#v\nwant: %#v", got, want)
+	}
+}
+
+// TestParseNumstat: table-driven parsing of `git log --pretty=format:%x00%H
+// --numstat` output — per-commit attribution, binary markers, rename-format
+// paths (numbers must parse, the path field is never inspected), empty
+// windows, and merge commits with no numstat block.
+func TestParseNumstat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		in      string
+		want    map[string]LineStats
+		wantErr string
+	}{
+		{
+			name: "empty output (empty window)",
+			in:   "",
+			want: map[string]LineStats{},
+		},
+		{
+			name: "single commit, ordinary numeric lines",
+			in:   "\x00aaa\n3\t1\tmain.go\n10\t0\tREADME.md\n",
+			want: map[string]LineStats{"aaa": {Added: 13, Removed: 1}},
+		},
+		{
+			name: "binary file line contributes zero to both counts",
+			in:   "\x00aaa\n-\t-\timg/logo.png\n2\t2\tmain.go\n",
+			want: map[string]LineStats{"aaa": {Added: 2, Removed: 2}},
+		},
+		{
+			name: "rename-format paths are ignored, numbers still parse",
+			in: "\x00aaa\n0\t0\told.go => new.go\n" +
+				"1\t2\tdir/{before => after}/file.go\n",
+			want: map[string]LineStats{"aaa": {Added: 1, Removed: 2}},
+		},
+		{
+			name: "path containing a tab does not disturb the numeric columns",
+			in:   "\x00aaa\n4\t5\t\"weird\tname.txt\"\n",
+			want: map[string]LineStats{"aaa": {Added: 4, Removed: 5}},
+		},
+		{
+			name: "multiple commits attribute per hash (blank line between records)",
+			in: "\x00aaa\n1\t0\ta.go\n\n" +
+				"\x00bbb\n0\t2\tb.go\n5\t5\tc.go\n",
+			want: map[string]LineStats{
+				"aaa": {Added: 1, Removed: 0},
+				"bbb": {Added: 5, Removed: 7},
+			},
+		},
+		{
+			name: "merge commit with no numstat block yields zero stats",
+			in:   "\x00aaa\n1\t1\ta.go\n\n\x00merged\n\x00bbb\n2\t0\tb.go\n",
+			want: map[string]LineStats{
+				"aaa":    {Added: 1, Removed: 1},
+				"merged": {},
+				"bbb":    {Added: 2, Removed: 0},
+			},
+		},
+		{
+			name: "merge commit as the last record (hash with no trailing newline)",
+			in:   "\x00aaa\n1\t1\ta.go\n\n\x00merged",
+			want: map[string]LineStats{
+				"aaa":    {Added: 1, Removed: 1},
+				"merged": {},
+			},
+		},
+		{
+			name:    "content before the first NUL is malformed",
+			in:      "garbage\n\x00aaa\n1\t1\ta.go\n",
+			wantErr: "unexpected content before first commit",
+		},
+		{
+			name:    "numstat line without two tabs is malformed",
+			in:      "\x00aaa\n1 1 a.go\n",
+			wantErr: "malformed numstat line",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ParseNumstat(tc.in)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseNumstat: %v", err)
+			}
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("ParseNumstat(%q) = %#v, want %#v", tc.in, got, tc.want)
+			}
+		})
 	}
 }

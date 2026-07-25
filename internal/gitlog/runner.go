@@ -118,10 +118,26 @@ func (r *Runner) LogSince(ctx context.Context, since time.Time) ([]Commit, error
 	return ParseLog(out)
 }
 
-// DiffForCommit runs `git show --format= <hash>` and returns the unified diff
-// introduced by that single commit (no commit message, just the diff body).
-func (r *Runner) DiffForCommit(ctx context.Context, hash string) (string, error) {
-	return r.run(ctx, append(noQuotePath, "show", "--format=", "--end-of-options", hash)...)
+// numstatFormat is the --pretty format for NumstatSince: a single NUL (%x00)
+// immediately BEFORE each commit's hash, so a flat split on NUL yields one
+// clean per-commit record (hash line + that commit's --numstat block) — the
+// same NUL-separator principle as logFormat (NUL is the one byte git can never
+// emit from commit content; see the logFormat doc comment).
+const numstatFormat = "--pretty=format:%x00%H"
+
+// NumstatSince runs `git log --since=<RFC3339> --numstat` with a NUL-prefixed
+// hash format and returns per-commit added/removed line totals, keyed by
+// commit hash (same open-ended window semantics as LogSince). One subprocess
+// replaces the previous per-commit `git show` fan-out for digest line stats.
+// No noQuotePath here: only the two numeric columns are read, paths are
+// ignored entirely (quoted or not), and file attribution comes from LogSince.
+func (r *Runner) NumstatSince(ctx context.Context, since time.Time) (map[string]LineStats, error) {
+	arg := "--since=" + since.UTC().Format(time.RFC3339)
+	out, err := r.run(ctx, "log", numstatFormat, arg, "--numstat")
+	if err != nil {
+		return nil, err
+	}
+	return ParseNumstat(out)
 }
 
 // ObjectExists runs `git cat-file -e <sha>^{commit}` and reports whether the
@@ -133,12 +149,22 @@ func (r *Runner) ObjectExists(ctx context.Context, sha string) bool {
 	return err == nil
 }
 
-// FetchRef runs `git fetch --no-tags <remote> <ref>` to make a remote ref/SHA
-// (e.g. `pull/N/head` or a base branch) available locally. The remote is a
-// parameter, not a hardcoded "origin": in fork workflows the PR's repository
-// is often configured as "upstream" while "origin" points at the fork.
-func (r *Runner) FetchRef(ctx context.Context, remote, ref string) error {
-	_, err := r.run(ctx, "fetch", "--no-tags", "--end-of-options", remote, ref)
+// FetchRef runs `git fetch --no-tags <remote> <ref>...` to make one or more
+// remote refs/SHAs (e.g. `pull/N/head` and a base branch) available locally in
+// a SINGLE fetch — git accepts multiple refspecs on one command line, so two
+// missing PR refs cost one subprocess, not two. The remote is a parameter, not
+// a hardcoded "origin": in fork workflows the PR's repository is often
+// configured as "upstream" while "origin" points at the fork.
+//
+// Zero refs is a no-op returning nil (like appending nothing): running bare
+// `git fetch <remote>` would fetch the remote's DEFAULT refspec — never what a
+// caller that computed an empty missing-ref list wants.
+func (r *Runner) FetchRef(ctx context.Context, remote string, refs ...string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	args := append([]string{"fetch", "--no-tags", "--end-of-options", remote}, refs...)
+	_, err := r.run(ctx, args...)
 	return err
 }
 

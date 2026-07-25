@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gitEnv isolates test git invocations from user/system configuration and
@@ -355,6 +356,154 @@ func TestRunnerFetchRef(t *testing.T) {
 	}
 	if err := runner.FetchRef(ctx, "no-such-remote", "extra"); err == nil {
 		t.Error("FetchRef(no-such-remote, extra): expected error, got nil")
+	}
+
+	// Zero refs: documented no-op — nil error, and crucially NO bare
+	// `git fetch <remote>` (which would fetch the default refspec).
+	if err := runner.FetchRef(ctx, "no-such-remote"); err != nil {
+		t.Errorf("FetchRef with zero refs = %v, want nil no-op", err)
+	}
+}
+
+// TestRunnerFetchRefMultipleRefs: two refspecs in ONE FetchRef call (the
+// combined pr-head + base fetch of prSource) makes both commits available
+// locally with a single git invocation.
+func TestRunnerFetchRefMultipleRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	origin := setupTestRepo(t)
+
+	work := t.TempDir()
+	runTestGit(t, work, "clone", "-q", origin, "clone")
+	cloneDir := filepath.Join(work, "clone")
+
+	// Two branches created in origin AFTER the clone: both unknown locally.
+	runTestGit(t, origin, "checkout", "-q", "-b", "one")
+	writeTestFile(t, origin, "one.txt", "one\n")
+	runTestGit(t, origin, "add", ".")
+	runTestGit(t, origin, "commit", "-q", "-m", "feat: branch one")
+	oneSHA := gitOutput(t, origin, "rev-parse", "HEAD")
+
+	runTestGit(t, origin, "checkout", "-q", "-b", "two")
+	writeTestFile(t, origin, "two.txt", "two\n")
+	runTestGit(t, origin, "add", ".")
+	runTestGit(t, origin, "commit", "-q", "-m", "feat: branch two")
+	twoSHA := gitOutput(t, origin, "rev-parse", "HEAD")
+
+	runner, err := NewRunner(cloneDir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	ctx := context.Background()
+
+	if runner.ObjectExists(ctx, oneSHA) || runner.ObjectExists(ctx, twoSHA) {
+		t.Fatal("branch commits unexpectedly present in clone before fetch")
+	}
+	if err := runner.FetchRef(ctx, "origin", "one", "two"); err != nil {
+		t.Fatalf("FetchRef(origin, one, two): %v", err)
+	}
+	if !runner.ObjectExists(ctx, oneSHA) {
+		t.Errorf("commit %s (ref one) still missing after combined fetch", oneSHA)
+	}
+	if !runner.ObjectExists(ctx, twoSHA) {
+		t.Errorf("commit %s (ref two) still missing after combined fetch", twoSHA)
+	}
+}
+
+// TestRunnerNumstatSince: one `git log --numstat` call returns per-commit
+// added/removed totals for every commit in the window, keyed by full hash —
+// including a pure rename (0/0 via the rename-format path, which the parser
+// never inspects) and multi-file commits summed per commit.
+func TestRunnerNumstatSince(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := setupTestRepo(t)
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	ctx := context.Background()
+
+	since := time.Now().Add(-24 * time.Hour)
+	stats, err := runner.NumstatSince(ctx, since)
+	if err != nil {
+		t.Fatalf("NumstatSince: %v", err)
+	}
+	if len(stats) != 3 {
+		t.Fatalf("stats = %#v, want entries for all 3 commits", stats)
+	}
+
+	// Map git's SHAs to the three known commits via rev-parse.
+	renameSHA := gitOutput(t, dir, "rev-parse", "HEAD")
+	midSHA := gitOutput(t, dir, "rev-parse", "HEAD~1")
+	firstSHA := gitOutput(t, dir, "rev-parse", "HEAD~2")
+
+	// Commit 1: a.txt (+2) and b.txt (+1) added → +3/-0.
+	if got := stats[firstSHA]; got != (LineStats{Added: 3, Removed: 0}) {
+		t.Errorf("first commit stats = %+v, want +3/-0", got)
+	}
+	// Commit 2: a.txt +1 line, b.txt -1 line (deleted), c.txt +1 line → +2/-1.
+	if got := stats[midSHA]; got != (LineStats{Added: 2, Removed: 1}) {
+		t.Errorf("mid commit stats = %+v, want +2/-1", got)
+	}
+	// Commit 3: pure rename (R100) → 0/0, present but zero.
+	if got, ok := stats[renameSHA]; !ok || got != (LineStats{}) {
+		t.Errorf("rename commit stats = %+v (present=%v), want zero LineStats present", got, ok)
+	}
+
+	// Empty window: future since → empty map, no error.
+	empty, err := runner.NumstatSince(ctx, time.Now().Add(24*time.Hour))
+	if err != nil {
+		t.Fatalf("NumstatSince(empty window): %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("empty-window stats = %#v, want empty map", empty)
+	}
+}
+
+// TestRunnerNumstatSinceMergeCommit: a merge commit appears in the window with
+// zero stats (git log prints no numstat block for merges) — must not crash or
+// mis-attribute neighbouring commits.
+func TestRunnerNumstatSinceMergeCommit(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := t.TempDir()
+	runTestGit(t, dir, "init", "-q", "-b", "main")
+	writeTestFile(t, dir, "base.txt", "base\n")
+	runTestGit(t, dir, "add", ".")
+	runTestGit(t, dir, "commit", "-q", "-m", "feat: base")
+	runTestGit(t, dir, "checkout", "-q", "-b", "side")
+	writeTestFile(t, dir, "side.txt", "side\n")
+	runTestGit(t, dir, "add", ".")
+	runTestGit(t, dir, "commit", "-q", "-m", "feat: side")
+	runTestGit(t, dir, "checkout", "-q", "main")
+	writeTestFile(t, dir, "main.txt", "main\n")
+	runTestGit(t, dir, "add", ".")
+	runTestGit(t, dir, "commit", "-q", "-m", "feat: main")
+	runTestGit(t, dir, "merge", "-q", "--no-ff", "-m", "merge side", "side")
+	mergeSHA := gitOutput(t, dir, "rev-parse", "HEAD")
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	stats, err := runner.NumstatSince(context.Background(), time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("NumstatSince: %v", err)
+	}
+	if len(stats) != 4 {
+		t.Fatalf("stats = %#v, want 4 entries (3 commits + merge)", stats)
+	}
+	if got := stats[mergeSHA]; got != (LineStats{}) {
+		t.Errorf("merge commit stats = %+v, want zero", got)
+	}
+	sideSHA := gitOutput(t, dir, "rev-parse", "side")
+	if got := stats[sideSHA]; got != (LineStats{Added: 1, Removed: 0}) {
+		t.Errorf("side commit stats = %+v, want +1/-0", got)
 	}
 }
 

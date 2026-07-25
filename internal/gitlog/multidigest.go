@@ -27,10 +27,11 @@ type RepoResult struct {
 // a job-index channel (§10.4) — not an unbounded fan-out, and this outer pool
 // is hand-rolled on raw channels/sync.WaitGroup rather than errgroup, per the
 // project's "teach raw stdlib concurrency" principle (docs/TECHNICAL_PLAN.md
-// §2). The per-commit diff collection *inside* each repo's AggregateDigest
-// call does use golang.org/x/sync/errgroup (a separate, inner pool) — that
+// §2). Inside each repo, collectOne runs exactly two independent git calls
+// (LogSince + NumstatSince) in parallel via golang.org/x/sync/errgroup — that
 // choice is scoped to that call site, not a blanket "no errgroup anywhere"
-// rule.
+// rule. Total concurrent git processes are therefore bounded by 2×concurrency
+// (no per-commit fan-out anymore, so no inner worker-sizing logic is needed).
 //
 // Results are written to results[i] by exactly one goroutine (the one that
 // claims job i), so no mutex is needed, and the returned slice preserves the
@@ -55,13 +56,6 @@ func CollectDigests(ctx context.Context, repoPaths []string, since time.Time, co
 		concurrency = len(repoPaths)
 	}
 
-	// Cap the inner errgroup (per-commit diffs) so total concurrent git
-	// processes stay at GOMAXPROCS rather than growing to concurrency×GOMAXPROCS.
-	innerConcurrency := runtime.GOMAXPROCS(0) / concurrency
-	if innerConcurrency < 1 {
-		innerConcurrency = 1
-	}
-
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for w := 0; w < concurrency; w++ {
@@ -69,7 +63,7 @@ func CollectDigests(ctx context.Context, repoPaths []string, since time.Time, co
 		go func() {
 			defer wg.Done()
 			for i := range jobs {
-				results[i] = collectOne(ctx, repoPaths[i], since, innerConcurrency)
+				results[i] = collectOne(ctx, repoPaths[i], since)
 			}
 		}()
 	}
@@ -119,10 +113,13 @@ func fillCancelled(results []RepoResult, repoPaths []string, since time.Time, er
 }
 
 // collectOne collects the digest for a single repository path, converting any
-// failure into a RepoResult.Err rather than propagating it (§10.4).
-// innerConcurrency limits the errgroup that parallelises DiffForCommit calls;
-// the caller sets it so that outer×inner stays at most GOMAXPROCS.
-func collectOne(ctx context.Context, path string, since time.Time, innerConcurrency int) RepoResult {
+// failure into a RepoResult.Err rather than propagating it (§10.4). It issues
+// exactly TWO git subprocesses, run in parallel via errgroup since neither
+// depends on the other: LogSince (commit metadata + --name-status file
+// attribution) and NumstatSince (per-commit added/removed line totals). This
+// replaced the previous per-commit `git show` fan-out — one subprocess per
+// commit in the window — that existed solely to feed DiffLineStats.
+func collectOne(ctx context.Context, path string, since time.Time) RepoResult {
 	until := time.Now().UTC()
 	if err := ctx.Err(); err != nil {
 		return RepoResult{Path: path, Since: since, Until: until, Err: err}
@@ -133,39 +130,29 @@ func collectOne(ctx context.Context, path string, since time.Time, innerConcurre
 		return RepoResult{Path: path, Since: since, Until: until, Err: err}
 	}
 
-	commits, err := runner.LogSince(ctx, since)
-	if err != nil {
+	var (
+		commits []Commit
+		stats   map[string]LineStats
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		commits, err = runner.LogSince(gctx, since)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		stats, err = runner.NumstatSince(gctx, since)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return RepoResult{Path: path, Since: since, Until: until, Err: err}
-	}
-
-	diffs := make(map[string]string, len(commits))
-	if len(commits) > 0 {
-		diffSlice := make([]string, len(commits)) // index-ordered, no mutex needed
-		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(min(innerConcurrency, len(commits)))
-		for i, c := range commits {
-			hash := c.Hash
-			g.Go(func() error {
-				d, err := runner.DiffForCommit(gctx, hash)
-				if err != nil {
-					return err
-				}
-				diffSlice[i] = d
-				return nil
-			})
-		}
-		if err := g.Wait(); err != nil {
-			return RepoResult{Path: path, Since: since, Until: until, Err: err}
-		}
-		for i, c := range commits {
-			diffs[c.Hash] = diffSlice[i]
-		}
 	}
 
 	return RepoResult{
 		Path:   path,
 		Since:  since,
 		Until:  until,
-		Digest: AggregateDigest(commits, diffs, since, until),
+		Digest: AggregateDigest(commits, stats, since, until),
 	}
 }

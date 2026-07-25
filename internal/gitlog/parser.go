@@ -2,6 +2,7 @@ package gitlog
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -127,6 +128,73 @@ func parseNameStatus(block string) ([]FileChange, error) {
 		}
 	}
 	return files, nil
+}
+
+// ParseNumstat parses the output of
+//
+//	git log --pretty=format:%x00%H --since=<...> --numstat
+//
+// into per-commit added/removed line totals keyed by commit hash. The NUL
+// before each %H makes a flat split on NUL yield exactly one record per
+// commit: the hash on the first line, followed by that commit's --numstat
+// block (`added\tremoved\t<path>` lines, blank lines around it). The path
+// field is deliberately NOT parsed: rename-format paths ("old => new",
+// "{old => new}/x") and quoted paths are irrelevant here — only the two
+// numeric columns are read, and file names for the digest come from the
+// separate --name-status call. A "-" in either numeric column is git's
+// binary-file convention and contributes 0 to both counts. A record with no
+// numstat lines (e.g. a merge commit, which `git log` shows without a diff)
+// yields a zero LineStats entry.
+func ParseNumstat(out string) (map[string]LineStats, error) {
+	stats := make(map[string]LineStats)
+	if strings.Trim(out, "\x00\n\r\t ") == "" {
+		return stats, nil
+	}
+
+	records := strings.Split(out, fieldSep)
+	// records[0] is whatever precedes the first NUL — always empty for this
+	// format; anything else means the output is not what we asked for.
+	if strings.TrimSpace(records[0]) != "" {
+		return nil, fmt.Errorf("parse git numstat: unexpected content before first commit: %q", truncateForError(records[0]))
+	}
+
+	for _, rec := range records[1:] {
+		hashLine, block, _ := strings.Cut(rec, "\n")
+		hash := strings.TrimSpace(hashLine)
+		if hash == "" {
+			return nil, fmt.Errorf("parse git numstat: record without a hash: %q", truncateForError(rec))
+		}
+		var s LineStats
+		for _, line := range strings.Split(block, "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			parts := strings.SplitN(line, "\t", 3)
+			if len(parts) != 3 {
+				return nil, fmt.Errorf("parse git numstat: malformed numstat line %q", truncateForError(line))
+			}
+			s.Added += parseNumstatField(parts[0])
+			s.Removed += parseNumstatField(parts[1])
+		}
+		stats[hash] = s
+	}
+	return stats, nil
+}
+
+// parseNumstatField converts one numeric --numstat column to an int. "-" is
+// git's binary-file marker (no line counts) → 0; a malformed number also
+// degrades to 0 rather than failing the whole window — the column grammar is
+// guaranteed by git, and a zero contribution is the same "no signal" answer
+// the binary marker gives.
+func parseNumstatField(f string) int {
+	if f == "-" {
+		return 0
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(f))
+	if err != nil {
+		return 0
+	}
+	return n
 }
 
 func truncateForError(s string) string {
