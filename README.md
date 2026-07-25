@@ -203,20 +203,35 @@ cache:
 Cache lives in `~/.cache/gitl/review/` (XDG-compliant). Disable per-call:
 `gitl review HEAD~5..HEAD --no-cache`
 
-### Custom templates (`prompt.system_template_file` / `output.template_file`)
+### Custom templates (`prompt.*_template_file` / `output.template_file`)
 
-Two independent, config-only overrides (there is no CLI flag for either):
+Independent, config-only overrides (there is no CLI flag for any of them):
 
 - **`prompt.system_template_file`** — your own **review system prompt**, to steer
-  the model's focus (security checklist, architecture constraints, team rules):
+  the model's focus (security checklist, architecture constraints, team rules).
+  Used only by `gitl review`:
 
   ```yaml
   prompt:
     system_template_file: "./review-policy.md"   # path relative to CWD
   ```
 
-  The system-prompt template has access to `{{ .Commits }}`, `{{ .Diff }}`,
+  The review system-prompt template has access to `{{ .Commits }}`, `{{ .Diff }}`,
   `{{ .Range }}`, `{{ .Staged }}` (see `internal/prompt/templates.go`).
+
+- **`prompt.changelog_system_template_file`** — your own **changelog system
+  prompt**, used only by `gitl changelog --ai`:
+
+  ```yaml
+  prompt:
+    changelog_system_template_file: "./changelog-policy.md"   # path relative to CWD
+  ```
+
+  The changelog system-prompt template has access to `{{ .Commits }}`,
+  `{{ .Range }}`, `{{ .Grouped }}` — **not** `{{ .Diff }}`: `changelog --ai`
+  works from commit metadata, there is no diff, and a review-shaped template
+  using `.Diff` would fail here. That's exactly why the two keys are separate:
+  each command only reads its own key, and either may be set without the other.
 
 - **`output.template_file`** — your own **`md`-format render template** for the
   finished review artifact:
@@ -229,7 +244,7 @@ Two independent, config-only overrides (there is no CLI flag for either):
   The output template has the render template functions in
   `internal/render/render.go` (`render.TemplateFuncs()`).
 
-> **Trust note:** `prompt.system_template_file`/`output.template_file` can be
+> **Trust note:** the `prompt.*_template_file`/`output.template_file` keys can be
 > set by a repo-level `.gitl.yaml`, not just your personal config — so running
 > `gitl review` against a cloned repository you don't control can point it at
 > a template *inside that same repository*. This is the intended mechanism

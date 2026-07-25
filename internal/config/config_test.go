@@ -376,15 +376,98 @@ func TestValidateRejectsMissingPromptTemplate(t *testing.T) {
 }
 
 // TestValidateSkipsPromptTemplateInOfflineMode: when no api_key is configured
-// (offline mode), an inaccessible system template file must not block Load so
-// that deterministic offline reviews remain available.
+// (offline mode), inaccessible system template files (review AND changelog)
+// must not block Load so that deterministic offline runs remain available.
 func TestValidateSkipsPromptTemplateInOfflineMode(t *testing.T) {
 	dir := t.TempDir()
 	personalPath := filepath.Join(dir, "config.yaml")
 	missing := filepath.Join(dir, "no-such.tmpl")
-	writeFile(t, personalPath, "prompt:\n  system_template_file: "+missing+"\n")
+	writeFile(t, personalPath, "prompt:\n  system_template_file: "+missing+"\n  changelog_system_template_file: "+missing+"\n")
 	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err != nil {
-		t.Errorf("offline mode must not validate prompt.system_template_file: %v", err)
+		t.Errorf("offline mode must not validate prompt.*_template_file: %v", err)
+	}
+}
+
+// TestValidatePromptTemplatesWithFuncs: system-prompt templates (review and
+// changelog) using functions genuinely registered in render.TemplateFuncs()
+// must pass validation at config load — before the fix, validation parsed
+// prompt.system_template_file WITHOUT the FuncMap that BuildReviewWithTemplate/
+// BuildChangelogWithTemplate register at execution time, so a template using
+// {{ upper ... }} broke EVERY command at Load. A genuinely undefined function
+// must still be rejected.
+func TestValidatePromptTemplatesWithFuncs(t *testing.T) {
+	tests := []struct {
+		name    string
+		key     string // yaml key under prompt:
+		content string
+		wantErr bool
+	}{
+		{"review template with upper is accepted", "system_template_file", "Review {{ upper .Range }}", false},
+		{"review template with trimTrailingNewlines is accepted", "system_template_file", "{{ trimTrailingNewlines .Diff }}", false},
+		{"review template with undefined func is rejected", "system_template_file", "{{ bogusFunc .Range }}", true},
+		{"changelog template with upper is accepted", "changelog_system_template_file", "Changelog {{ upper .Range }}", false},
+		{"changelog template with undefined func is rejected", "changelog_system_template_file", "{{ bogusFunc .Range }}", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tmplPath := filepath.Join(dir, "sys.tmpl")
+			writeFile(t, tmplPath, tt.content)
+			personalPath := filepath.Join(dir, "config.yaml")
+			// api_key set → online mode, so validate() actually checks the file.
+			writeFile(t, personalPath, "llm:\n  api_key: test-key\nprompt:\n  "+tt.key+": "+tmplPath+"\n")
+			_, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+			if tt.wantErr && err == nil {
+				t.Errorf("expected error for prompt.%s = %q", tt.key, tt.content)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("Load() error = %v, want template %q accepted", err, tt.content)
+			}
+		})
+	}
+}
+
+// TestValidateChangelogTemplateIndependent: prompt.changelog_system_template_file
+// is validated on its own — a broken path for one key fails Load regardless of
+// whether the OTHER key is unset or perfectly valid, and the error names the
+// key that is actually broken.
+func TestValidateChangelogTemplateIndependent(t *testing.T) {
+	dir := t.TempDir()
+	valid := filepath.Join(dir, "ok.tmpl")
+	writeFile(t, valid, "System prompt for {{.Range}}")
+	missing := filepath.Join(dir, "no-such.tmpl")
+
+	tests := []struct {
+		name       string
+		promptYAML string // lines under prompt:
+		wantErrKey string // "" = Load must succeed
+	}{
+		{"bad changelog key alone fails", "  changelog_system_template_file: " + missing + "\n", "prompt.changelog_system_template_file"},
+		{"bad changelog key fails despite valid review key", "  system_template_file: " + valid + "\n  changelog_system_template_file: " + missing + "\n", "prompt.changelog_system_template_file"},
+		{"bad review key fails despite valid changelog key", "  system_template_file: " + missing + "\n  changelog_system_template_file: " + valid + "\n", "prompt.system_template_file"},
+		{"both keys valid loads", "  system_template_file: " + valid + "\n  changelog_system_template_file: " + valid + "\n", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			personalPath := filepath.Join(t.TempDir(), "config.yaml")
+			writeFile(t, personalPath, "llm:\n  api_key: test-key\nprompt:\n"+tt.promptYAML)
+			cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+			if tt.wantErrKey == "" {
+				if err != nil {
+					t.Fatalf("Load() error = %v, want success", err)
+				}
+				if cfg.Prompt.ChangelogSystemTemplateFile != valid {
+					t.Errorf("ChangelogSystemTemplateFile = %q, want %q", cfg.Prompt.ChangelogSystemTemplateFile, valid)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error naming %s", tt.wantErrKey)
+			}
+			if !strings.Contains(err.Error(), tt.wantErrKey) {
+				t.Errorf("error = %q, want it to name %s", err.Error(), tt.wantErrKey)
+			}
+		})
 	}
 }
 

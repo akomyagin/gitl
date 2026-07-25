@@ -123,11 +123,17 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 		return false, nil
 	}
 
+	// The changelog template key is deliberately SEPARATE from the review key
+	// (prompt.system_template_file): the review template executes against
+	// prompt.Review (with .Diff), the changelog one against prompt.Changelog
+	// (Range/Commits/Grouped, no .Diff) — sharing one key would crash
+	// `changelog --ai` on any review-shaped template using .Diff. Empty means
+	// the embedded default changelog system prompt, as before.
 	system, user, err := prompt.BuildChangelogWithTemplate(prompt.Changelog{
 		Range:   revRange,
 		Commits: commits,
 		Grouped: cl,
-	}, cfg.Prompt.SystemTemplateFile)
+	}, cfg.Prompt.ChangelogSystemTemplateFile)
 	if err != nil {
 		return true, fmt.Errorf("prompt template: %w", err)
 	}

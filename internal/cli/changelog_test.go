@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -779,6 +780,127 @@ func TestChangelogAIGeminiEndToEnd(t *testing.T) {
 		t.Errorf("?key= = %q, want AIza-fake", gotKey)
 	}
 	if !strings.Contains(out, "Brand new feature A") || !strings.Contains(out, "Corrected bug in B") {
+		t.Errorf("AI prose missing from output:\n%s", out)
+	}
+}
+
+// changelogAIBodyServer is newChangelogAIServer plus request-body capture, for
+// asserting on the exact system message the changelog --ai path sends (the
+// template-scoping tests below). Single-request tests only: the last body wins.
+func changelogAIBodyServer(t *testing.T, content string) (*httptest.Server, *string) {
+	t.Helper()
+	gotBody := new(string)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		*gotBody = string(b)
+		resp := map[string]any{
+			"choices": []map[string]any{
+				{"message": map[string]any{"role": "assistant", "content": content}},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(resp); err != nil {
+			panic(fmt.Sprintf("encode mock response: %v", err))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv, gotBody
+}
+
+// systemMessageOf extracts the system message from a captured OpenAI-compatible
+// chat/completions request body.
+func systemMessageOf(t *testing.T, body string) string {
+	t.Helper()
+	var parsed struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(body), &parsed); err != nil {
+		t.Fatalf("request body is not JSON: %v\n%s", err, body)
+	}
+	for _, m := range parsed.Messages {
+		if m.Role == "system" {
+			return m.Content
+		}
+	}
+	t.Fatalf("no system message in request body:\n%s", body)
+	return ""
+}
+
+// defaultChangelogSystemMarker is a phrase unique to the embedded default
+// changelog system prompt (internal/prompt/templates/changelog_system.tmpl).
+const defaultChangelogSystemMarker = "release-notes editor"
+
+// TestChangelogAIIgnoresReviewSystemTemplate: a review-shaped template using
+// .Diff configured as prompt.system_template_file must NOT be consulted by
+// changelog --ai. Before the key split the two commands shared that one key,
+// so this exact setup crashed changelog --ai with "can't evaluate field Diff
+// in type prompt.Changelog"; now the changelog path only reads
+// prompt.changelog_system_template_file and falls back to its own built-in
+// default system prompt here.
+func TestChangelogAIIgnoresReviewSystemTemplate(t *testing.T) {
+	dir := setupChangelogRepo(t)
+	hashes := gitShortHashes(t, dir) // newest first: [docs C, fix B, feat A]
+
+	reviewTmpl := filepath.Join(dir, "review-policy.md")
+	if err := os.WriteFile(reviewTmpl, []byte("Team review policy for {{ .Range }}:\n{{ .Diff }}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitl.yaml"), []byte("prompt:\n  system_template_file: "+reviewTmpl+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, gotBody := changelogAIBodyServer(t, aiChangelogContent(hashes[2], hashes[1]))
+	t.Setenv("GITL_API_KEY", "sk-fake-changelog")
+
+	out, stderr, err := runChangelogInDir(t, dir, "--ai", "--base-url", srv.URL, "--no-cache")
+	if err != nil {
+		t.Fatalf("changelog --ai must not execute the review template: %v\nstderr:\n%s", err, stderr)
+	}
+	system := systemMessageOf(t, *gotBody)
+	if !strings.Contains(system, defaultChangelogSystemMarker) {
+		t.Errorf("system message is not the built-in changelog prompt:\n%s", system)
+	}
+	if strings.Contains(system, "Team review policy") {
+		t.Errorf("review template leaked into the changelog system prompt:\n%s", system)
+	}
+	if !strings.Contains(out, "Brand new feature A") {
+		t.Errorf("AI prose missing from output:\n%s", out)
+	}
+}
+
+// TestChangelogAIUsesChangelogSystemTemplate: prompt.changelog_system_template_file
+// replaces the built-in changelog system prompt, is executed with the
+// prompt.Changelog data, and has render.TemplateFuncs() available.
+func TestChangelogAIUsesChangelogSystemTemplate(t *testing.T) {
+	dir := setupChangelogRepo(t)
+	hashes := gitShortHashes(t, dir)
+
+	clTmpl := filepath.Join(dir, "changelog-policy.md")
+	if err := os.WriteFile(clTmpl, []byte("CUSTOM CHANGELOG {{ upper \"policy\" }} for {{ .Range }} covering {{ len .Commits }} commit(s).\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".gitl.yaml"), []byte("prompt:\n  changelog_system_template_file: "+clTmpl+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, gotBody := changelogAIBodyServer(t, aiChangelogContent(hashes[2], hashes[1]))
+	t.Setenv("GITL_API_KEY", "sk-fake-changelog")
+
+	out, stderr, err := runChangelogInDir(t, dir, "--ai", "--base-url", srv.URL, "--no-cache")
+	if err != nil {
+		t.Fatalf("changelog --ai with a custom changelog template: %v\nstderr:\n%s", err, stderr)
+	}
+	system := systemMessageOf(t, *gotBody)
+	if !strings.Contains(system, "CUSTOM CHANGELOG POLICY for HEAD covering 3 commit(s).") {
+		t.Errorf("system message not rendered from the custom changelog template:\n%s", system)
+	}
+	if strings.Contains(system, defaultChangelogSystemMarker) {
+		t.Errorf("built-in changelog prompt used despite a custom template:\n%s", system)
+	}
+	if !strings.Contains(out, "Brand new feature A") {
 		t.Errorf("AI prose missing from output:\n%s", out)
 	}
 }

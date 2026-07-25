@@ -54,9 +54,14 @@ type CacheConfig struct {
 // PromptConfig holds custom prompt template overrides (Item 3). When
 // SystemTemplateFile is empty the embedded default review system prompt is used
 // (identical to prior behavior); otherwise it is parsed as a text/template and
-// executed with the review data.
+// executed with the review data. ChangelogSystemTemplateFile is the analogous
+// override for `changelog --ai` and is executed with the changelog data
+// (prompt.Changelog: Range/Commits/Grouped — no Diff). The two keys are
+// independent: review never reads the changelog key and vice versa, because
+// the two commands execute the template against structurally different data.
 type PromptConfig struct {
-	SystemTemplateFile string `mapstructure:"system_template_file"`
+	SystemTemplateFile          string `mapstructure:"system_template_file"`
+	ChangelogSystemTemplateFile string `mapstructure:"changelog_system_template_file"`
 }
 
 // LLMConfig configures the LLM provider and request parameters.
@@ -190,25 +195,26 @@ func defaults() map[string]any {
 		// GITL_LLM_AZURE_OPENAI_* env vars — env vars are only consulted for
 		// keys viper already knows about (same quirk as the policy list keys,
 		// see TestEnvPolicyListKeys).
-		"llm.azure_openai.endpoint":            "",
-		"llm.azure_openai.deployment":          "",
-		"llm.azure_openai.api_version":         "",
-		"cost.max_cost_usd":                    0.50,
-		"cost.warn_at_usd":                     0.10,
-		"cost.price_per_1m_input":              0.0,
-		"cost.price_per_1m_output":             0.0,
-		"output.format":                        "md",
-		"output.color":                         true,
-		"output.template_file":                 "",
-		"output.stream":                        true,
-		"prompt.system_template_file":          "",
-		"diff.max_diff_bytes":                  120000,
-		"diff.exclude_globs":                   []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},
-		"policy.fail_on":                       "never",
-		"policy.exclude_globs":                 []string{},
-		"policy.required_changelog_categories": []string{},
-		"cache.enabled":                        true,
-		"cache.ttl_hours":                      24,
+		"llm.azure_openai.endpoint":             "",
+		"llm.azure_openai.deployment":           "",
+		"llm.azure_openai.api_version":          "",
+		"cost.max_cost_usd":                     0.50,
+		"cost.warn_at_usd":                      0.10,
+		"cost.price_per_1m_input":               0.0,
+		"cost.price_per_1m_output":              0.0,
+		"output.format":                         "md",
+		"output.color":                          true,
+		"output.template_file":                  "",
+		"output.stream":                         true,
+		"prompt.system_template_file":           "",
+		"prompt.changelog_system_template_file": "",
+		"diff.max_diff_bytes":                   120000,
+		"diff.exclude_globs":                    []string{"*.lock", "*.min.js", "vendor/**", "*.svg"},
+		"policy.fail_on":                        "never",
+		"policy.exclude_globs":                  []string{},
+		"policy.required_changelog_categories":  []string{},
+		"cache.enabled":                         true,
+		"cache.ttl_hours":                       24,
 	}
 }
 
@@ -448,12 +454,18 @@ func (c *Config) validate() error {
 
 	// Custom template overrides: when set, the file must exist and parse as a
 	// text/template so failures surface at config-load time rather than mid-review.
+	// Parsing registers render.TemplateFuncs() — the same FuncMap the prompt
+	// builders register at execution time — so a template using a real registered
+	// function (e.g. {{ upper .Range }}) is not falsely rejected here.
 	//
 	// System template validation is skipped in offline mode: runReview clears the
-	// path before use when offline, so an inaccessible file must not block a
-	// deterministic offline review.
+	// path before use when offline (and changelog --ai falls back before template
+	// execution), so an inaccessible file must not block a deterministic offline run.
 	if !c.OfflineMode() {
-		if err := validateTemplateFile("prompt.system_template_file", c.Prompt.SystemTemplateFile, nil); err != nil {
+		if err := validateTemplateFile("prompt.system_template_file", c.Prompt.SystemTemplateFile, render.TemplateFuncs()); err != nil {
+			return err
+		}
+		if err := validateTemplateFile("prompt.changelog_system_template_file", c.Prompt.ChangelogSystemTemplateFile, render.TemplateFuncs()); err != nil {
 			return err
 		}
 	}
