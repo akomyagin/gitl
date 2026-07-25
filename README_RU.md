@@ -177,7 +177,9 @@ llm:
 
 При интерактивном ревью (`md` или `text` в TTY) `gitl` стримит токены в терминал
 по мере поступления — не нужно ждать полного ответа. Стриминг включён по умолчанию
-и автоматически отключается в CI (не-TTY stdout) или с `--format=json`.
+и автоматически отключается в CI (не-TTY stdout), с `--format=json`, а также при
+заданном кастомном `output.template_file` (шаблону нужен полный ответ, поэтому
+ревью буферизуется и рендерится через него).
 
 Стриминг сейчас реализован **только для OpenAI-совместимого провайдера**
 (`openai` / `ollama` / `azure_openai`). С нативным `anthropic` или `gemini`
@@ -359,17 +361,32 @@ request'а (`$CI_MERGE_REQUEST_DIFF_BASE_SHA..$CI_COMMIT_SHA`), собирает
 `<!-- gitl-review -->`, что на GitHub/Gitea). Job запускается только в
 merge-request-пайплайнах.
 
-Репозиторий живёт на GitHub, поэтому компонента пока нет в GitLab CI/CD Catalog —
-подключайте через `include:remote` (inputs работают и с remote-include):
+Компонент опубликован в [GitLab CI/CD Catalog](https://gitlab.com/explore/catalog/alkom68/gitl)
+через релизное зеркало этого репозитория —
+[`gitlab.com/alkom68/gitl`](https://gitlab.com/alkom68/gitl) (одностороннее
+GitHub → GitLab, пуш на каждый релизный тег). На gitlab.com подключайте как
+catalog-компонент:
 
 ```yaml
-# .gitlab-ci.yml
+# .gitlab-ci.yml (gitlab.com)
 include:
-  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.2/templates/gitl-review.yml"
+  - component: gitlab.com/alkom68/gitl/gitl-review@v0.5.2
     inputs:
       fail_on: "never"      # по умолчанию; "high" — блокировать рискованные MR
       # max_cost_usd: "0.50"
       # gitl_version: "v0.5.2"
+```
+
+На self-hosted-инстансе GitLab `include:component` резолвит компоненты только
+своего же инстанса — там подключайте шаблон через `include:remote` напрямую с
+GitHub (inputs работают и с remote-include):
+
+```yaml
+# .gitlab-ci.yml (self-hosted GitLab)
+include:
+  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.2/templates/gitl-review.yml"
+    inputs:
+      fail_on: "never"
 ```
 
 Настройка — две CI/CD-переменные (Settings → CI/CD → Variables, обе **masked**,
@@ -411,10 +428,12 @@ include:
 > `raw.githubusercontent.com` на `gitl_version` и исполняет его — без
 > проверки контрольной суммы/подписи, та же доверительная граница, что и у
 > строки `go install ...@${gitl_version}` строкой выше (тот же репозиторий,
-> тот же ref). Если это важно для вашей модели угроз — пиньте `gitl_version`
-> на SHA коммита, а не тег (теги перемещаемы). Публикация компонента в
-> GitLab CI/CD Catalog устранила бы это скачивание целиком — запланировано,
-> но ещё не сделано.
+> тот же ref). Скачивание происходит **независимо от способа подключения** —
+> Catalog или `include:remote` — потому что include компонента доставляет
+> только YAML-шаблон, но не файлы репозитория компонента. Если это важно для
+> вашей модели угроз — пиньте `gitl_version` на SHA коммита, а не тег (теги
+> перемещаемы). Полное устранение скачивания (например, инлайн рендера прямо
+> в шаблон) — запланированный follow-up, ещё не сделано.
 
 ## Bitbucket Pipelines (экспериментально)
 
@@ -429,12 +448,11 @@ action и GitLab-компонента (чистые YAML-обёртки), зде
 API Bitbucket Cloud (тот же маркер `<!-- gitl-review -->`, что на остальных
 платформах). Справочник переменных — [`bitbucket-pipe/pipe.yml`](bitbucket-pipe/pipe.yml).
 
-> **Статус образа.** Образ **ещё не опубликован на Docker Hub** — job
-> `docker-publish` релизного workflow пропускает push, пока не заведены секреты
-> `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` (тот же graceful-skip-паттерн, что у
-> npm). До тех пор соберите его сами из корня репозитория:
-> `docker build -f bitbucket-pipe/Dockerfile -t alkom68/gitl-review-pipe:0.5.2 .`
-> и запушьте в реестр, доступный вашему пайплайну.
+> **Статус образа.** Опубликован на [Docker Hub](https://hub.docker.com/r/alkom68/gitl-review-pipe)
+> как `alkom68/gitl-review-pipe` начиная с `v0.5.2` — job `docker-publish`
+> релизного workflow пушит `:<version>` и `:latest` на каждый релизный тег.
+> В реестре есть только `0.5.2` и новее: более ранние релизы вышли до
+> публикации (теги `0.5.0`/`0.5.1` не пушились) — их не пинить.
 
 ```yaml
 # bitbucket-pipelines.yml
