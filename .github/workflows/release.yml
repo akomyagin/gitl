@@ -88,6 +88,47 @@ jobs:
           fi
           echo "OK: gitl-review.yml spec.inputs.gitl_version.default=$DEFAULT"
 
+      # Fourth version-sync invariant (docs/TECHNICAL_PLAN.md §12.2 in spirit):
+      # the Go version is duplicated as plain text in four files with no shared
+      # source. go.mod's `go` directive is the source of truth; the GitHub
+      # action (actions/setup-go), the GitLab component (golang: image) and the
+      # Bitbucket pipe (ARG GO_VERSION) must all match it, or a `go.mod` bump
+      # would silently drift the CI toolchains. Anchored awk extraction (same
+      # style as the version-pin checks above), never a fragile grep window.
+      - name: Verify Go version pin across manifests
+        run: |
+          GO_MOD=$(awk '/^go / { print $2; exit }' go.mod)
+          if [ -z "$GO_MOD" ]; then
+            echo 'ERROR: could not extract the go directive from go.mod — did its structure change?'
+            exit 1
+          fi
+
+          ACTION=$(awk '/^        go-version:/ { val = $2; gsub(/"/, "", val); print val; exit }' action.yml)
+          GITLAB=$(awk -F'golang:' '/^  image: golang:/ { print $2; exit }' templates/gitl-review.yml)
+          DOCKER=$(awk -F= '/^ARG GO_VERSION=/ { print $2; exit }' bitbucket-pipe/Dockerfile)
+
+          fail=0
+          for pair in \
+            "action.yml:$ACTION" \
+            "templates/gitl-review.yml:$GITLAB" \
+            "bitbucket-pipe/Dockerfile:$DOCKER"; do
+            file="${pair%%:*}"
+            val="${pair#*:}"
+            if [ -z "$val" ]; then
+              echo "ERROR: could not extract the Go version from $file — did its structure change?"
+              fail=1
+            elif [ "$val" != "$GO_MOD" ]; then
+              printf 'ERROR: %s Go version "%s" does not match go.mod "%s"\n' "$file" "$val" "$GO_MOD"
+              fail=1
+            fi
+          done
+
+          if [ "$fail" != 0 ]; then
+            echo 'Update the drifted file(s) so all four Go versions match go.mod before tagging.'
+            exit 1
+          fi
+          echo "OK: Go version $GO_MOD in sync across go.mod/action.yml/templates/gitl-review.yml/bitbucket-pipe/Dockerfile"
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:

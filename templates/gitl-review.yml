@@ -188,17 +188,23 @@ gitl-review:
       # so fetch the platform-neutral comment renderer pinned to the SAME
       # ref as the gitl binary above (works for tags, branches and SHAs).
       #
-      # Trust note: this is a fetch-and-exec with no integrity check
-      # (checksum/signature) of the downloaded script — accepted for now
-      # because it doesn't widen the trust boundary the job already has via
-      # `go install ...@${GITL_VERSION}` one line above (same repo, same
-      # mutable-tag-by-default ref). Security-conscious consumers should pin
-      # gitl_version to a commit SHA rather than a tag. The real fix —
-      # publishing this component to the GitLab CI/CD Catalog, which ships
-      # repository files with the component instead of fetching them over
-      # the network — removes this fetch entirely and is already planned.
+      # Trust note: this fetch cannot be avoided mechanically — a GitLab
+      # component include delivers only this YAML template to the pipeline,
+      # never the component repository's files, so ci/comment.sh has to be
+      # pulled at run time. It is fetched from the GitLab mirror
+      # (gitlab.com/alkom68/gitl) that the release workflow's gitlab-mirror
+      # job pushes on every release tag, so ci/comment.sh is available there
+      # at the same ref. Downloading it from the same GitLab instance that
+      # publishes this component (rather than from raw.githubusercontent.com
+      # on GitHub) is a more honest trust model: the script comes from the
+      # same namespace and ref as the component itself. It is still a
+      # fetch-and-exec with no integrity check (checksum/signature) — the
+      # same trust boundary the job already has via `go install ...@${GITL_VERSION}`
+      # one line above (same repo, same mutable-tag-by-default ref).
+      # Security-conscious consumers should pin gitl_version to a commit SHA
+      # rather than a tag.
       curl -sSfL --retry 2 \
-        "https://raw.githubusercontent.com/akomyagin/gitl/${GITL_VERSION}/ci/comment.sh" \
+        "https://gitlab.com/alkom68/gitl/-/raw/${GITL_VERSION}/ci/comment.sh" \
         -o gitl-comment.sh
     - |
       # ---- run the review -----------------------------------------------

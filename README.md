@@ -511,16 +511,17 @@ example — is [`.gitlab-ci-selftest.yml`](.gitlab-ci-selftest.yml) (runnable as
 > allowlist docs, not reproduced. Treat the *pipeline* path as experimental
 > until someone confirms a green end-to-end run; bug reports welcome.
 
-> **Trust note.** The component downloads `ci/comment.sh` from
-> `raw.githubusercontent.com` at `gitl_version` and executes it — with no
-> checksum/signature check, same trust boundary as the `go install
+> **Trust note.** The component downloads `ci/comment.sh` from the GitLab
+> mirror (`gitlab.com/alkom68/gitl`) at `gitl_version` and executes it — with
+> no checksum/signature check, same trust boundary as the `go install
 > ...@${gitl_version}` line right above it (same repo, same ref). This fetch
 > happens **regardless of how the component is included** — Catalog or
 > `include:remote` — because a component include ships only the YAML template,
-> not the component repository's files. If that matters for your threat model,
-> pin `gitl_version` to a commit SHA rather than a tag (tags are movable).
-> Removing the fetch entirely (e.g. inlining the renderer into the template)
-> is a planned follow-up, not done yet.
+> not the component repository's files, so the fetch can't be avoided
+> mechanically. Downloading from the same GitLab instance that publishes the
+> component (rather than from GitHub) keeps it same-namespace/same-ref, a more
+> honest trust model than a cross-host fetch. If that matters for your threat
+> model, pin `gitl_version` to a commit SHA rather than a tag (tags are movable).
 
 ## Bitbucket Pipelines (experimental)
 
