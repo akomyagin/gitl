@@ -173,7 +173,9 @@ llm:
 
 When reviewing interactively (`md` or `text` format on a TTY), `gitl` streams tokens
 to the terminal as they arrive — no waiting for the full response. Streaming is on by
-default and switches off automatically in CI (non-TTY stdout) or with `--format=json`.
+default and switches off automatically in CI (non-TTY stdout), with `--format=json`,
+and when a custom `output.template_file` is configured (the template needs the
+complete response, so the review is buffered and rendered through it instead).
 
 Streaming is currently implemented **only for the OpenAI-compatible provider**
 (`openai` / `ollama` / `azure_openai`). With the native `anthropic` or `gemini`
@@ -344,17 +346,31 @@ the shared platform-neutral [`ci/comment.sh`](ci/comment.sh), and creates/update
 **sticky MR note** through GitLab's REST API (same `<!-- gitl-review -->` marker as on
 GitHub/Gitea). The job only runs in merge request pipelines.
 
-This repository lives on GitHub, so the component is not in a GitLab CI/CD Catalog
-yet — consume it via `include:remote` (inputs work with remote includes):
+The component is published in the [GitLab CI/CD Catalog](https://gitlab.com/explore/catalog/alkom68/gitl)
+through a release-time mirror of this repository at
+[`gitlab.com/alkom68/gitl`](https://gitlab.com/alkom68/gitl) (one-way GitHub → GitLab,
+pushed on every release tag). On gitlab.com, include it as a catalog component:
 
 ```yaml
-# .gitlab-ci.yml
+# .gitlab-ci.yml (gitlab.com)
 include:
-  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.2/templates/gitl-review.yml"
+  - component: gitlab.com/alkom68/gitl/gitl-review@v0.5.2
     inputs:
       fail_on: "never"      # default; set "high" to block risky MRs
       # max_cost_usd: "0.50"
       # gitl_version: "v0.5.2"
+```
+
+On a self-hosted GitLab instance, `include:component` only resolves components
+from the same instance — consume the template via `include:remote` straight from
+GitHub instead (inputs work with remote includes):
+
+```yaml
+# .gitlab-ci.yml (self-hosted GitLab)
+include:
+  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.5.2/templates/gitl-review.yml"
+    inputs:
+      fail_on: "never"
 ```
 
 Setup — two CI/CD variables (Settings → CI/CD → Variables, both **masked**, never
@@ -394,10 +410,13 @@ example — is [`.gitlab-ci-selftest.yml`](.gitlab-ci-selftest.yml) (runnable as
 > **Trust note.** The component downloads `ci/comment.sh` from
 > `raw.githubusercontent.com` at `gitl_version` and executes it — with no
 > checksum/signature check, same trust boundary as the `go install
-> ...@${gitl_version}` line right above it (same repo, same ref). If that
-> matters for your threat model, pin `gitl_version` to a commit SHA rather
-> than a tag (tags are movable). Publishing this component to the GitLab
-> CI/CD Catalog would remove the fetch entirely — planned, not done yet.
+> ...@${gitl_version}` line right above it (same repo, same ref). This fetch
+> happens **regardless of how the component is included** — Catalog or
+> `include:remote` — because a component include ships only the YAML template,
+> not the component repository's files. If that matters for your threat model,
+> pin `gitl_version` to a commit SHA rather than a tag (tags are movable).
+> Removing the fetch entirely (e.g. inlining the renderer into the template)
+> is a planned follow-up, not done yet.
 
 ## Bitbucket Pipelines (experimental)
 
@@ -412,13 +431,11 @@ PR range (`$BITBUCKET_PR_DESTINATION_COMMIT..$BITBUCKET_COMMIT`), runs
 Bitbucket Cloud REST API (same `<!-- gitl-review -->` marker as on the other
 platforms). Variables reference: [`bitbucket-pipe/pipe.yml`](bitbucket-pipe/pipe.yml).
 
-> **Image status.** The image is **not published to Docker Hub yet** — the
-> release workflow's `docker-publish` job skips the push until
-> `DOCKERHUB_USERNAME`/`DOCKERHUB_TOKEN` secrets are provisioned (same
-> graceful-skip pattern as npm). Until then, build it yourself from the
-> repository root:
-> `docker build -f bitbucket-pipe/Dockerfile -t alkom68/gitl-review-pipe:0.5.2 .`
-> and push it to a registry your pipeline can pull from.
+> **Image status.** Published on [Docker Hub](https://hub.docker.com/r/alkom68/gitl-review-pipe)
+> as `alkom68/gitl-review-pipe` since `v0.5.2` — the release workflow's
+> `docker-publish` job pushes `:<version>` and `:latest` on every release tag.
+> Only `0.5.2` and later exist in the registry: earlier releases predate the
+> publication (the `0.5.0`/`0.5.1` tags were never pushed), so don't pin those.
 
 ```yaml
 # bitbucket-pipelines.yml
