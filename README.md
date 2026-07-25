@@ -242,6 +242,31 @@ The stored entries contain only the model's response, keyed by an opaque hash:
 no diff and no prompt text ever reach the remote cache. Entries older than
 `ttl_hours` are ignored client-side regardless of what the server returns.
 
+### Risk trend (`policy.risk_log_enabled`)
+
+Every `gitl review` run appends its risk outcome (level, range, provider, timestamp)
+to a local JSONL log: `$XDG_DATA_HOME/gitl/risk-history.jsonl` (default
+`~/.local/share/gitl/risk-history.jsonl`; `%AppData%\gitl\` on Windows).
+`gitl digest` reads it back and shows a per-repo **"Risk trend (last N days)"**
+section — review count by level, high-risk direction (recent half vs earlier half
+of the window), and the last few reviews. In `--format=json` it appears as an
+optional `risk_trend` field (`schema_version` stays `1`; consumers that predate
+it see the same document as before). Repos with no history simply omit the section.
+
+Reviews are correlated with a repository by its `origin` remote URL (falling back
+to the worktree path when there is no `origin`).
+
+> **Limitation:** the history is **local to your machine** — it does not persist
+> across CI runners (each starts with a cold disk), so the trend is a feature for
+> local developer use, not for CI.
+
+Opt out in config (no CLI flag):
+
+```yaml
+policy:
+  risk_log_enabled: false
+```
+
 ### Custom templates (`prompt.*_template_file` / `output.template_file`)
 
 Independent, config-only overrides (there is no CLI flag for any of them):

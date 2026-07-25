@@ -38,6 +38,27 @@ type DigestFileStat struct {
 	Commits int
 }
 
+// DigestRiskTrend is the render-owned view of one repository's local
+// risk-history aggregation (mirrors riskhistory.Trend the same way
+// DigestAuthorStat mirrors gitlog.AuthorStat — render never imports
+// riskhistory).
+type DigestRiskTrend struct {
+	Total        int
+	Low          int
+	Medium       int
+	High         int
+	RecentHigh   int
+	PreviousHigh int
+	Recent       []DigestRiskEntry // newest first, <= 5
+}
+
+// DigestRiskEntry is one recent review in the trend's short list.
+type DigestRiskEntry struct {
+	When  time.Time
+	Range string
+	Level string
+}
+
 // RepoDigest is one repository's digest result, or an error (§10.5). When Err
 // is non-empty, the aggregate fields are the zero value and must not be
 // treated as "zero activity" — Ok distinguishes the two cases explicitly in
@@ -53,6 +74,10 @@ type RepoDigest struct {
 	ByAuthor     []DigestAuthorStat
 	ByTopic      []DigestTopicStat
 	TopFiles     []DigestFileStat
+	// RiskTrend is the optional local risk-history trend for this repo; nil
+	// when there is no history (the section/JSON field is then omitted
+	// entirely).
+	RiskTrend *DigestRiskTrend
 }
 
 // DigestArtifact is the fully-computed digest, single- or multi-repo (§10.5):
@@ -86,14 +111,14 @@ func digestMarkdownBody(art DigestArtifact) string {
 
 	if len(art.Repos) == 1 {
 		fmt.Fprintf(&b, "# Digest — last %d days (%s → %s)\n\n", art.Days, dateOnly(art.Since), dateOnly(art.Until))
-		writeRepoDigestBody(&b, art.Repos[0], false)
+		writeRepoDigestBody(&b, art.Repos[0], false, art.Days)
 		return b.String()
 	}
 
 	fmt.Fprintf(&b, "# Multi-repo digest — last %d days (%s → %s)\n\n", art.Days, dateOnly(art.Since), dateOnly(art.Until))
 	for _, r := range art.Repos {
 		fmt.Fprintf(&b, "## %s\n\n", r.Path)
-		writeRepoDigestBody(&b, r, true)
+		writeRepoDigestBody(&b, r, true, art.Days)
 	}
 	writeOverallSummary(&b, art.Repos)
 
@@ -102,8 +127,9 @@ func digestMarkdownBody(art DigestArtifact) string {
 
 // writeRepoDigestBody writes one repository's section body. When headed is
 // true, sub-sections use "###" (nested under a "## <path>" heading);
-// otherwise "##" (single-repo top-level sections).
-func writeRepoDigestBody(b *strings.Builder, r RepoDigest, headed bool) {
+// otherwise "##" (single-repo top-level sections). days is the artifact's
+// window size, named in the optional "Risk trend" heading.
+func writeRepoDigestBody(b *strings.Builder, r RepoDigest, headed bool, days int) {
 	if !r.Ok {
 		fmt.Fprintf(b, "**Error:** %s\n\n", r.Err)
 		return
@@ -148,6 +174,22 @@ func writeRepoDigestBody(b *strings.Builder, r RepoDigest, headed bool) {
 		b.WriteString("| File | Commits |\n|---|---|\n")
 		for _, f := range r.TopFiles {
 			fmt.Fprintf(b, "| %s | %d |\n", f.Path, f.Commits)
+		}
+		b.WriteString("\n")
+	}
+
+	// Optional risk trend from the local review history. nil = no history for
+	// this repo → the section is omitted entirely (no "no history" noise).
+	if t := r.RiskTrend; t != nil {
+		fmt.Fprintf(b, "%s Risk trend (last %d days)\n\n", h, days)
+		fmt.Fprintf(b, "- Reviews: %d (low %d / medium %d / high %d)\n", t.Total, t.Low, t.Medium, t.High)
+		fmt.Fprintf(b, "- High-risk: %d recent vs %d earlier\n", t.RecentHigh, t.PreviousHigh)
+		if len(t.Recent) > 0 {
+			b.WriteString("- Recent reviews:\n\n")
+			b.WriteString("| When | Range | Risk |\n|---|---|---|\n")
+			for _, e := range t.Recent {
+				fmt.Fprintf(b, "| %s | %s | %s |\n", dateOnly(e.When), e.Range, e.Level)
+			}
 		}
 		b.WriteString("\n")
 	}
@@ -225,6 +267,28 @@ type jsonRepoDigest struct {
 	ByAuthor []jsonDigestAuthor `json:"by_author"`
 	ByTopic  []jsonDigestTopic  `json:"by_topic"`
 	TopFiles []jsonDigestFile   `json:"top_files"`
+	// RiskTrend is omitted entirely when there is no local risk history for
+	// this repo. omitempty on the pointer makes this a purely ADDITIVE,
+	// non-breaking change: consumers that predate risk_trend see the exact
+	// same document as before, so DigestSchemaVersion stays 1 (§7.4/§9.4 —
+	// additive fields do not bump the schema).
+	RiskTrend *jsonRiskTrend `json:"risk_trend,omitempty"`
+}
+
+type jsonRiskTrend struct {
+	Total        int             `json:"total"`
+	Low          int             `json:"low"`
+	Medium       int             `json:"medium"`
+	High         int             `json:"high"`
+	RecentHigh   int             `json:"recent_high"`
+	PreviousHigh int             `json:"previous_high"`
+	Recent       []jsonRiskEntry `json:"recent"`
+}
+
+type jsonRiskEntry struct {
+	When  string `json:"when"` // RFC3339, consistent with generated_at/since/until
+	Range string `json:"range"`
+	Level string `json:"level"`
 }
 
 type jsonDigestStats struct {
@@ -292,6 +356,25 @@ func renderDigestJSON(w io.Writer, art DigestArtifact) error {
 			jr.TopFiles = make([]jsonDigestFile, 0, len(r.TopFiles))
 			for _, f := range r.TopFiles {
 				jr.TopFiles = append(jr.TopFiles, jsonDigestFile{Path: f.Path, Commits: f.Commits})
+			}
+			if t := r.RiskTrend; t != nil {
+				jt := &jsonRiskTrend{
+					Total:        t.Total,
+					Low:          t.Low,
+					Medium:       t.Medium,
+					High:         t.High,
+					RecentHigh:   t.RecentHigh,
+					PreviousHigh: t.PreviousHigh,
+					Recent:       make([]jsonRiskEntry, 0, len(t.Recent)),
+				}
+				for _, e := range t.Recent {
+					jt.Recent = append(jt.Recent, jsonRiskEntry{
+						When:  e.When.UTC().Format(time.RFC3339),
+						Range: e.Range,
+						Level: e.Level,
+					})
+				}
+				jr.RiskTrend = jt
 			}
 		} else {
 			overall.ReposFailed++

@@ -16,6 +16,7 @@ import (
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/gitlog"
 	"github.com/akomyagin/gitl/internal/render"
+	"github.com/akomyagin/gitl/internal/riskhistory"
 )
 
 // DigestOptions carries the per-run digest parameters. Deliberately plain Go
@@ -54,7 +55,53 @@ func RunDigestCore(ctx context.Context, cfg *config.Config, opts DigestOptions) 
 	slog.Debug("collecting digest", "repos", len(repoPaths), "days", opts.Days, "concurrency", concurrency)
 	results := gitlog.CollectDigests(ctx, repoPaths, since, concurrency)
 
-	return buildDigestArtifact(now, opts.Days, since, results), nil
+	trends := digestRiskTrends(ctx, cfg, results, opts.Days, now)
+	return buildDigestArtifact(now, opts.Days, since, results, trends), nil
+}
+
+// digestRiskTrends loads the local risk-history log once and aggregates a
+// per-repo trend for every successful repo result, keyed by the result's Path.
+// Entirely best-effort: an unavailable/unreadable log, a failed repo-key
+// resolution, or an empty window all just mean "no trend attached" — the
+// digest must NEVER fail (or even warn) because of the risk log. Returns nil
+// when policy.risk_log_enabled is false (digest behaves exactly as before).
+func digestRiskTrends(ctx context.Context, cfg *config.Config, results []gitlog.RepoResult, days int, now time.Time) map[string]*render.DigestRiskTrend {
+	if !cfg.Policy.RiskLogEnabled {
+		return nil
+	}
+	log, err := riskhistory.New()
+	if err != nil {
+		slog.Debug("risk history unavailable", "err", err)
+		return nil
+	}
+	records, err := log.Load()
+	if err != nil {
+		slog.Debug("risk history unreadable, treating as empty", "err", err)
+		return nil
+	}
+	if len(records) == 0 {
+		return nil
+	}
+
+	trends := make(map[string]*render.DigestRiskTrend)
+	for _, r := range results {
+		if r.Err != nil {
+			continue
+		}
+		// CollectDigests yields worktree paths, not runners — build a Runner
+		// for the repo (one cheap `git remote get-url origin` per repo) so the
+		// reader computes the SAME identity key the review writer used.
+		runner, rerr := gitlog.NewRunner(r.Path)
+		if rerr != nil {
+			continue
+		}
+		key := riskhistory.RepoKey(ctx, runner)
+		trend := riskhistory.Aggregate(records, key, days, now)
+		if trend.Total > 0 {
+			trends[r.Path] = toRenderRiskTrend(trend)
+		}
+	}
+	return trends
 }
 
 // digestRepoPaths determines the repository path list (§10.4): explicit paths
@@ -105,8 +152,9 @@ func normalizeRepoPaths(raw []string) []string {
 }
 
 // buildDigestArtifact converts worker-pool results into the render artifact
-// (§10.5/§10.6).
-func buildDigestArtifact(generatedAt time.Time, days int, since time.Time, results []gitlog.RepoResult) render.DigestArtifact {
+// (§10.5/§10.6). trends (nil when risk logging is disabled or there is no
+// history) attaches the optional per-repo risk trend, keyed by repo path.
+func buildDigestArtifact(generatedAt time.Time, days int, since time.Time, results []gitlog.RepoResult, trends map[string]*render.DigestRiskTrend) render.DigestArtifact {
 	repos := make([]render.RepoDigest, 0, len(results))
 	for _, r := range results {
 		if r.Err != nil {
@@ -123,6 +171,7 @@ func buildDigestArtifact(generatedAt time.Time, days int, since time.Time, resul
 			ByAuthor:     toRenderAuthors(r.Digest.ByAuthor),
 			ByTopic:      toRenderTopics(r.Digest.ByTopic),
 			TopFiles:     toRenderFiles(r.Digest.TopFiles),
+			RiskTrend:    trends[r.Path],
 		})
 	}
 
@@ -133,6 +182,29 @@ func buildDigestArtifact(generatedAt time.Time, days int, since time.Time, resul
 		Until:       generatedAt,
 		Repos:       repos,
 	}
+}
+
+// toRenderRiskTrend maps riskhistory.Trend into the render-owned
+// DigestRiskTrend (render never imports riskhistory — same pattern as
+// toRenderAuthors below).
+func toRenderRiskTrend(t riskhistory.Trend) *render.DigestRiskTrend {
+	out := &render.DigestRiskTrend{
+		Total:        t.Total,
+		Low:          t.Counts["low"],
+		Medium:       t.Counts["medium"],
+		High:         t.Counts["high"],
+		RecentHigh:   t.RecentHigh,
+		PreviousHigh: t.PreviousHigh,
+		Recent:       make([]render.DigestRiskEntry, 0, len(t.Recent)),
+	}
+	for _, rec := range t.Recent {
+		out.Recent = append(out.Recent, render.DigestRiskEntry{
+			When:  rec.Timestamp,
+			Range: rec.Range,
+			Level: rec.RiskLevel,
+		})
+	}
+	return out
 }
 
 func toRenderAuthors(stats []gitlog.AuthorStat) []render.DigestAuthorStat {

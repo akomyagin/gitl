@@ -144,10 +144,14 @@ type DiffConfig struct {
 // PolicyConfig is the repo-level governance policy. fail_on is the CI gating
 // threshold wired into `review` as of Этап 2; required_changelog_categories is
 // wired into `changelog` as of Этап 3 (warn-only, see docs/TECHNICAL_PLAN.md §9.3).
+// risk_log_enabled (default true) toggles the local risk-history JSONL log:
+// `review` appends each run's risk outcome, `digest` reads it back for the
+// per-repo "Risk trend" section. Config-only opt-out — no CLI flag.
 type PolicyConfig struct {
 	FailOn                      string   `mapstructure:"fail_on"`
 	RequiredChangelogCategories []string `mapstructure:"required_changelog_categories"`
 	ExcludeGlobs                []string `mapstructure:"exclude_globs"`
+	RiskLogEnabled              bool     `mapstructure:"risk_log_enabled"`
 }
 
 // DigestConfig holds the repo-level multi-repo digest.repos list (§10.4/§10.6).
@@ -225,6 +229,7 @@ func defaults() map[string]any {
 		"policy.fail_on":                        "never",
 		"policy.exclude_globs":                  []string{},
 		"policy.required_changelog_categories":  []string{},
+		"policy.risk_log_enabled":               true,
 		"cache.enabled":                         true,
 		"cache.ttl_hours":                       24,
 		// Registered (empty) so viper's AutomaticEnv surfaces

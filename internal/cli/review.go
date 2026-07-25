@@ -19,6 +19,7 @@ import (
 	"github.com/akomyagin/gitl/internal/gitlog"
 	"github.com/akomyagin/gitl/internal/llm"
 	"github.com/akomyagin/gitl/internal/render"
+	"github.com/akomyagin/gitl/internal/riskhistory"
 )
 
 // failError signals that the risk score met the --fail-on threshold. It is
@@ -345,6 +346,9 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 		if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
 			return err
 		}
+		// A cache hit is still a review event: the trend log records the
+		// CHRONOLOGY of reviews, so cached results are logged too (no dedup).
+		recordRiskHistory(ctx, cfg, src, art.RiskLevel, art.RiskSummary, art.RiskHeuristic)
 		return gateFailOn(cfg, art.RiskLevel)
 	}
 
@@ -379,6 +383,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 			// Risk header printed after [DONE] — body already written by Stream.
 			fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLine(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic))
 			plan.storeCache(resp)
+			recordRiskHistory(ctx, cfg, src, resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic)
 			return gateFailOn(cfg, resp.Risk.Level)
 		}
 		if cw.written > 0 {
@@ -401,7 +406,42 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	}
 
 	// Gate LAST, only after the review has been printed (§9).
+	recordRiskHistory(ctx, cfg, src, art.RiskLevel, art.RiskSummary, art.RiskHeuristic)
 	return gateFailOn(cfg, art.RiskLevel)
+}
+
+// recordRiskHistory appends one risk-history record for a completed review.
+// Best-effort: any error is slog.Debug'd, never surfaced — history logging
+// must never affect the review's exit code. Skipped when disabled by config
+// (policy.risk_log_enabled: false). Called only from the cobra path
+// (runReview), deliberately NOT from RunReviewCore: the record needs the repo
+// identity (a *gitlog.Runner in the CWD), and an MCP caller should not
+// auto-write local disk history.
+func recordRiskHistory(ctx context.Context, cfg *config.Config, src diffSource, level, summary string, heuristic bool) {
+	if !cfg.Policy.RiskLogEnabled {
+		return
+	}
+	log, err := riskhistory.New()
+	if err != nil {
+		slog.Debug("risk history unavailable", "err", err)
+		return
+	}
+	runner, _ := gitlog.NewRunner("") // best-effort; RepoKey tolerates a nil runner
+	rec := riskhistory.Record{
+		SchemaVersion: riskhistory.RecordSchemaVersion,
+		Timestamp:     time.Now().UTC(),
+		Repo:          riskhistory.RepoKey(ctx, runner),
+		Range:         src.Label,
+		RiskLevel:     level,
+		RiskSummary:   summary,
+		Provider:      cfg.LLM.Provider,
+		Model:         cfg.LLM.Model,
+		Heuristic:     heuristic,
+		Offline:       cfg.OfflineMode(),
+	}
+	if err := log.Append(rec); err != nil {
+		slog.Debug("risk history append failed", "err", err)
+	}
 }
 
 // buildArtifact assembles the render artifact from the review inputs and the
