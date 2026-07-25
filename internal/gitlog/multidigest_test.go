@@ -167,8 +167,9 @@ func TestDefaultConcurrency(t *testing.T) {
 }
 
 // setupMultiCommitRepo creates a temporary git repo with n commits, each
-// touching a distinct file. Used by Item 2 tests to exercise the intra-repo
-// errgroup parallel path (n > 1 goroutines calling DiffForCommit concurrently).
+// touching a distinct file. Used to confirm a multi-commit window aggregates
+// correctly through the two parallel per-repo git calls (LogSince +
+// NumstatSince).
 func setupMultiCommitRepo(t *testing.T, n int) string {
 	t.Helper()
 	if n < 1 {
@@ -189,9 +190,10 @@ func setupMultiCommitRepo(t *testing.T, n int) string {
 }
 
 // TestCollectDigestsMultipleCommitsPerRepoParallel: a repository with 3+
-// commits exercises the intra-repo errgroup path introduced in Item 2.
-// The returned Digest.Commits must equal the number of commits in the window
-// (identical output to the previous sequential implementation).
+// commits exercises the per-repo parallel LogSince+NumstatSince pair (the
+// errgroup inside collectOne). The digest must be identical to what the old
+// per-commit DiffForCommit fan-out produced: same commit count AND same line
+// totals (each commit adds one "package main\n" line via a new file).
 func TestCollectDigestsMultipleCommitsPerRepoParallel(t *testing.T) {
 	t.Parallel()
 	const numCommits = 3
@@ -209,6 +211,10 @@ func TestCollectDigestsMultipleCommitsPerRepoParallel(t *testing.T) {
 	}
 	if r.Digest.Commits != numCommits {
 		t.Errorf("Digest.Commits = %d, want %d", r.Digest.Commits, numCommits)
+	}
+	// Line stats now come from NumstatSince: one added line per commit.
+	if r.Digest.LinesAdded != numCommits || r.Digest.LinesRemoved != 0 {
+		t.Errorf("Digest lines = +%d/-%d, want +%d/-0", r.Digest.LinesAdded, r.Digest.LinesRemoved, numCommits)
 	}
 }
 

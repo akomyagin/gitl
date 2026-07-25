@@ -107,6 +107,12 @@ func TestDiffLineStats(t *testing.T) {
 			diff:      "+stray added\n-stray removed\n",
 			wantAdded: 0, wantRemoved: 0,
 		},
+		{
+			name: "final line without trailing newline is still counted",
+			diff: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n" +
+				"@@ -1 +1 @@\n-old\n+new", // no trailing \n after the last content line
+			wantAdded: 1, wantRemoved: 1,
+		},
 	}
 
 	for _, tc := range tests {

@@ -14,15 +14,15 @@ func TestAggregateDigestByAuthor(t *testing.T) {
 		{Hash: "h2", Author: "John Roe", Subject: "fix: b", Files: []FileChange{{Path: "b.go"}}},
 		{Hash: "h3", Author: "Jane Doe", Subject: "fix: c", Files: []FileChange{{Path: "a.go"}}},
 	}
-	// Structurally real diffs (header + hunk): DiffLineStats only counts
-	// lines inside a hunk, so bare +/- lines without "@@" would count as 0.
-	diffs := map[string]string{
-		"h1": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1,2 @@\n+added1\n+added2\n",
-		"h2": "diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -1 +1 @@\n+added\n-removed\n",
-		"h3": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,3 +0,0 @@\n-removed1\n-removed2\n-removed3\n",
+	// Per-commit line totals as NumstatSince would deliver them (the digest
+	// no longer sees diff text at all — only these aggregate counts).
+	stats := map[string]LineStats{
+		"h1": {Added: 2, Removed: 0},
+		"h2": {Added: 1, Removed: 1},
+		"h3": {Added: 0, Removed: 3},
 	}
 
-	d := AggregateDigest(commits, diffs, since, until)
+	d := AggregateDigest(commits, stats, since, until)
 
 	if d.Commits != 3 {
 		t.Errorf("Commits = %d, want 3", d.Commits)

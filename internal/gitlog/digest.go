@@ -47,10 +47,12 @@ type Digest struct {
 const topFilesLimit = 10
 
 // AggregateDigest computes the deterministic digest for commits observed in
-// [since, until]. diffs maps commit hash to that commit's unified diff text
-// (collected by the caller via Runner.DiffForCommit) — used only for the
-// per-author added/removed line counts.
-func AggregateDigest(commits []Commit, diffs map[string]string, since, until time.Time) Digest {
+// [since, until]. stats maps commit hash to that commit's added/removed line
+// totals (collected by the caller via Runner.NumstatSince) — used only for
+// the per-author added/removed line counts. A hash missing from stats reads
+// as a zero-value LineStats (Go map lookup semantics), i.e. zero lines —
+// exactly how an absent diff behaved before.
+func AggregateDigest(commits []Commit, stats map[string]LineStats, since, until time.Time) Digest {
 	d := Digest{Since: since, Until: until, Commits: len(commits)}
 
 	authorIdx := make(map[string]int)
@@ -65,12 +67,12 @@ func AggregateDigest(commits []Commit, diffs map[string]string, since, until tim
 			authorIdx[c.Author] = idx
 			d.ByAuthor = append(d.ByAuthor, AuthorStat{Author: c.Author})
 		}
-		added, removed := DiffLineStats(diffs[c.Hash])
+		s := stats[c.Hash]
 		d.ByAuthor[idx].Commits++
-		d.ByAuthor[idx].LinesAdded += added
-		d.ByAuthor[idx].LinesRemoved += removed
-		d.LinesAdded += added
-		d.LinesRemoved += removed
+		d.ByAuthor[idx].LinesAdded += s.Added
+		d.ByAuthor[idx].LinesRemoved += s.Removed
+		d.LinesAdded += s.Added
+		d.LinesRemoved += s.Removed
 
 		// By topic: reuse the changelog conventional-commit type parser.
 		topicCounts[topicOf(c)]++

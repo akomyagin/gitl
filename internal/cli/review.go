@@ -13,6 +13,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/gitlog"
@@ -193,19 +194,34 @@ func stagedSource(ctx context.Context, runner *gitlog.Runner) (diffSource, error
 	return diffSource{Diff: rawDiff, Label: "staged", Staged: true, Mode: modeStaged}, nil
 }
 
-// rangeSource collects the historical log+diff pair for a revision range.
+// rangeSource collects the historical log+diff pair for a revision range. The
+// two git calls are independent (neither consumes the other's output), so they
+// run in parallel via errgroup. On an invalid/malformed range the returned
+// error may now come from EITHER the log or the diff call (whichever errgroup
+// surfaces first) rather than deterministically from the log — acceptable,
+// since git's error text for a bad range is equivalent from both commands.
 func rangeSource(ctx context.Context, runner *gitlog.Runner, revRange string) (diffSource, error) {
 	slog.Debug("collecting git history", "range", revRange)
-	commits, err := runner.Log(ctx, revRange)
-	if err != nil {
+	var (
+		commits []gitlog.Commit
+		rawDiff string
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		commits, err = runner.Log(gctx, revRange)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		rawDiff, err = runner.Diff(gctx, revRange)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return diffSource{}, err
 	}
 	if len(commits) == 0 {
 		return diffSource{}, fmt.Errorf("no commits found in range %q", revRange)
-	}
-	rawDiff, err := runner.Diff(ctx, revRange)
-	if err != nil {
-		return diffSource{}, err
 	}
 	return diffSource{Commits: commits, Diff: rawDiff, Label: revRange, Mode: modeRange}, nil
 }
@@ -238,15 +254,17 @@ func prSource(ctx context.Context, runner *gitlog.Runner, resolver PRResolver, p
 	// pull/N/head refspec works for cross-repository (fork) PRs too. Each SHA
 	// is probed once up front and re-probed only after an actual fetch (a
 	// successful fetch does not guarantee the SHA: the PR may have been
-	// force-pushed between `gh pr view` and the fetch).
+	// force-pushed between `gh pr view` and the fetch). When BOTH refs are
+	// missing they are fetched in ONE `git fetch` (multiple refspecs, one
+	// subprocess) — a combined fetch error cannot cleanly attribute failure to
+	// the head vs the base ref (an accepted simplification of the previous two
+	// sequential fetches), but the error names every refspec it attempted.
 	headOK := runner.ObjectExists(ctx, ref.HeadSHA)
-	if !headOK {
-		if err := runner.FetchRef(ctx, remote, fmt.Sprintf("pull/%d/head", prNum)); err != nil {
-			return diffSource{}, fmt.Errorf("fetching %s head: %w", label, err)
-		}
-		headOK = runner.ObjectExists(ctx, ref.HeadSHA)
-	}
 	baseOK := runner.ObjectExists(ctx, ref.BaseSHA)
+	var missing []string
+	if !headOK {
+		missing = append(missing, fmt.Sprintf("pull/%d/head", prNum))
+	}
 	if !baseOK {
 		// Fetch the base by branch name when gh reported one — bare-SHA
 		// fetches only work on servers with allowReachableSHA1InWant (github.com
@@ -255,21 +273,42 @@ func prSource(ctx context.Context, runner *gitlog.Runner, resolver PRResolver, p
 		if baseRef == "" {
 			baseRef = ref.BaseSHA
 		}
-		if err := runner.FetchRef(ctx, remote, baseRef); err != nil {
-			return diffSource{}, fmt.Errorf("fetching %s base: %w", label, err)
+		missing = append(missing, baseRef)
+	}
+	if len(missing) > 0 {
+		if err := runner.FetchRef(ctx, remote, missing...); err != nil {
+			return diffSource{}, fmt.Errorf("fetching %s (refspecs %s from %s): %w", label, strings.Join(missing, ", "), remote, err)
 		}
-		baseOK = runner.ObjectExists(ctx, ref.BaseSHA)
+		if !headOK {
+			headOK = runner.ObjectExists(ctx, ref.HeadSHA)
+		}
+		if !baseOK {
+			baseOK = runner.ObjectExists(ctx, ref.BaseSHA)
+		}
 	}
 	if !headOK || !baseOK {
 		return diffSource{}, fmt.Errorf("could not resolve PR #%d commits locally after fetching — your clone may be shallow (run `git fetch --unshallow`), or the PR may have been updated concurrently (retry)", prNum)
 	}
 
-	commits, err := runner.Log(ctx, ref.BaseSHA+".."+ref.HeadSHA)
-	if err != nil {
-		return diffSource{}, err
-	}
-	diff, err := runner.Diff(ctx, ref.BaseSHA+"..."+ref.HeadSHA)
-	if err != nil {
+	// Log (the PR's own commits, base..head) and Diff (the merge-base diff,
+	// base...head) are independent git calls — run them in parallel, same
+	// pattern and same error-ordering nuance as rangeSource above.
+	var (
+		commits []gitlog.Commit
+		diff    string
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		commits, err = runner.Log(gctx, ref.BaseSHA+".."+ref.HeadSHA)
+		return err
+	})
+	g.Go(func() error {
+		var err error
+		diff, err = runner.Diff(gctx, ref.BaseSHA+"..."+ref.HeadSHA)
+		return err
+	})
+	if err := g.Wait(); err != nil {
 		return diffSource{}, err
 	}
 	return diffSource{Commits: commits, Diff: diff, Label: label, Mode: modePR}, nil
