@@ -71,9 +71,11 @@ spec:
     gitl_version:
       default: "v0.5.2"
       description: >-
-        Git ref of akomyagin/gitl to build with `go install` (tag/branch/SHA).
-        Defaults to the CLI release this component ships with — override only
-        for testing (the ref must be reachable on github.com/akomyagin/gitl).
+        Git ref of akomyagin/gitl to install (tag/branch/SHA). Release tags
+        (vX.Y.Z) are installed from the pre-built, checksum-verified release
+        binaries; branches/SHAs are built with `go install`. Defaults to the
+        CLI release this component ships with — override only for testing
+        (the ref must be reachable on github.com/akomyagin/gitl).
 
 ---
 gitl-review:
@@ -113,7 +115,48 @@ gitl-review:
     - set -euo pipefail
     - |
       # ---- install gitl at the pinned ref -------------------------------
-      go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"
+      # Fast path: for release tags, download the pre-built archive that
+      # .goreleaser.yaml publishes with every release and verify its SHA256
+      # against the release's checksums.txt — same trust model as the npm
+      # installer (npm/install.js). Any failure (404 for a freshly-pushed
+      # tag whose assets aren't live yet, network error, checksum mismatch
+      # from a truncated download, unsupported arch) degrades gracefully to
+      # the `go install` source build below instead of failing the job.
+      # Branches/SHAs always use `go install`. GitLab runners here are
+      # Linux-only (the golang image), so no OS fork — arch is still
+      # detected because gitlab.com offers arm64 SaaS runners too.
+      install_prebuilt() {
+        local goarch asset base tmp expected actual
+        case "$(uname -m)" in
+          x86_64 | amd64)  goarch=amd64 ;;
+          aarch64 | arm64) goarch=arm64 ;;
+          *)               return 1 ;;
+        esac
+        # goreleaser name_template: gitl_<version-without-v>_<os>_<arch>.tar.gz
+        asset="gitl_${GITL_VERSION#v}_linux_${goarch}.tar.gz"
+        base="https://github.com/akomyagin/gitl/releases/download/${GITL_VERSION}"
+        tmp="$(mktemp -d)"
+        curl -sSfL --retry 2 --connect-timeout 10 --max-time 120 -o "${tmp}/${asset}" "${base}/${asset}" || return 1
+        curl -sSfL --retry 2 --connect-timeout 10 --max-time 120 -o "${tmp}/checksums.txt" "${base}/checksums.txt" || return 1
+        expected="$(awk -v a="$asset" '$2 == a { print $1 }' "${tmp}/checksums.txt")"
+        [ -n "$expected" ] || return 1
+        actual="$(sha256sum "${tmp}/${asset}" | awk '{ print $1 }')"
+        [ "$actual" = "$expected" ] || return 1
+        tar -xzf "${tmp}/${asset}" -C "$tmp" || return 1
+        # One shell process runs the whole script: list, so this export is
+        # visible to all later `- |` blocks (see the scope note above).
+        export PATH="${tmp}:${PATH}"
+        echo "Installed gitl ${GITL_VERSION} from prebuilt binary (checksum verified)"
+      }
+
+      if [[ "$GITL_VERSION" =~ ^v[0-9] ]]; then
+        if ! install_prebuilt; then
+          echo "WARNING: prebuilt gitl binary for ${GITL_VERSION} unavailable or failed checksum verification — falling back to 'go install' (source build)." >&2
+          go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"
+        fi
+      else
+        go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"
+      fi
 
       # jq is needed by ci/comment.sh and by the sticky-comment logic below;
       # the golang (Debian) image does not ship it.
