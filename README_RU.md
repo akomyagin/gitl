@@ -323,6 +323,26 @@ jobs:
   `secrets.*` в логах runner'а как `***`, но это не повод печатать ключ
   в собственных шагах workflow.
 
+### Риск-сводка в описании PR (opt-in)
+
+С `update-pr-description: true` (по умолчанию `false`) Action дополнительно
+поддерживает компактный блок риск-сводки в конце описания PR — строка риска
+плюс ссылка на полный комментарий-ревью, обновляется при каждом запуске:
+
+```yaml
+      - uses: akomyagin/gitl@v0.5.2
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}
+          update-pr-description: true
+```
+
+Это opt-in, потому что правка описания PR — более навязчивое действие, чем
+sticky-комментарий; новых прав не требуется — `pull-requests: write`, уже
+нужный для комментария, покрывает и тело PR. Блок ограничен парой маркеров
+`<!-- gitl-review-summary -->`, и заменяется только текст между маркерами —
+всё, что вы пишете вне их, никогда не трогается. Пока только GitHub (на
+Gitea Actions игнорируется).
+
 ## Gitea Actions (экспериментально)
 
 Тот же `action.yml` работает и на [Gitea Actions](https://docs.gitea.com/usage/actions/overview):

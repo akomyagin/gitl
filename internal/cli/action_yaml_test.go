@@ -76,6 +76,42 @@ func TestActionYAMLProviderInputsWiring(t *testing.T) {
 	}
 }
 
+// TestActionYAMLUpdatePRDescriptionWiring statically asserts the opt-in PR
+// description update is wired through action.yml: the input exists, it is
+// passed to the run script via env (same env-only convention as the other
+// inputs), the summary block uses its own marker pair (distinct from the
+// sticky-comment marker), and the PR body is PATCHed through the pulls
+// endpoint — NOT the issues endpoint, which is only for comments.
+func TestActionYAMLUpdatePRDescriptionWiring(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "action.yml"))
+	if err != nil {
+		t.Fatalf("read action.yml: %v", err)
+	}
+	content := string(data)
+
+	for _, want := range []string{
+		"update-pr-description:",
+		"GITL_UPDATE_PR_DESCRIPTION: ${{ inputs.update-pr-description }}",
+		"<!-- gitl-review-summary -->",
+		"ci/pr-summary-merge.sh",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("action.yml is missing %q (update-pr-description wiring)", want)
+		}
+	}
+
+	// The PR body lives on the pulls endpoint; PATCHing an issues/ path here
+	// would silently hit the wrong resource (issues/N PATCH edits the issue,
+	// including title/state — a much more destructive mistake than a 404).
+	if !strings.Contains(content, `gh api "repos/${GITHUB_REPOSITORY}/pulls/${GITL_PR_NUMBER}"`) {
+		t.Error(`action.yml must read/PATCH the PR body via the pulls endpoint (gh api "repos/${GITHUB_REPOSITORY}/pulls/${GITL_PR_NUMBER}")`)
+	}
+	if strings.Contains(content, `issues/${GITL_PR_NUMBER}"`) {
+		t.Error("action.yml appears to hit the bare issues/N endpoint — the PR body must go through pulls/ (issues/N is only valid with a /comments suffix)")
+	}
+}
+
 // repoRoot walks up from this test file's directory to find go.mod, so the
 // test works regardless of the working directory `go test` is invoked from.
 func repoRoot(t *testing.T) string {

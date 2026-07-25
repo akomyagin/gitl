@@ -309,6 +309,26 @@ Security best practices:
 - **Secret masking.** GitHub automatically masks `secrets.*` values in runner logs as
   `***`, but that's not a reason to print the key in your own workflow steps.
 
+### PR description risk summary (opt-in)
+
+With `update-pr-description: true` (default `false`), the Action additionally maintains
+a compact risk-summary block at the end of the PR description — the risk line plus a
+link back to the full review comment, updated on every run:
+
+```yaml
+      - uses: akomyagin/gitl@v0.5.2
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}
+          update-pr-description: true
+```
+
+It's opt-in because editing the PR description is more intrusive than a sticky comment;
+no extra permissions are needed — `pull-requests: write`, already required for the
+comment, also covers the PR body. The block is delimited by the
+`<!-- gitl-review-summary -->` marker pair, and only the text between the markers is
+ever replaced — everything you write outside them is never touched. GitHub-only for
+now (ignored on Gitea Actions).
+
 ## Gitea Actions (experimental)
 
 The same `action.yml` also runs on [Gitea Actions](https://docs.gitea.com/usage/actions/overview) —
