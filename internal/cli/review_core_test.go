@@ -16,6 +16,8 @@ import (
 
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/gitlog"
+	"github.com/akomyagin/gitl/internal/llm"
+	"github.com/akomyagin/gitl/internal/llmcache"
 )
 
 // coreTestConfig loads a merged config exactly the way a non-CLI caller would:
@@ -150,5 +152,47 @@ func TestRunReviewCoreCostGuardBlocks(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "estimated cost") || !strings.Contains(err.Error(), "max-cost-usd") {
 		t.Errorf("error %q should be the cost-guard message", err)
+	}
+}
+
+// TestStoreCacheSkipsEmptyResponse: defense in depth against cache poisoning —
+// an empty/whitespace-only provider response must never be written to the
+// shared LLM cache, whichever path produced it (a poisoned entry would be
+// served to the buffered CLI, --no-stream, and MCP gitl_review for the whole
+// TTL). Non-empty responses must still be cached normally.
+func TestStoreCacheSkipsEmptyResponse(t *testing.T) {
+	cache := llmcache.NewInDir(t.TempDir(), time.Hour)
+	key := llmcache.Key(llmcache.KeyParams{Provider: "openai", Model: "gpt-4o-mini", System: "s", User: "u"})
+	plan := &reviewPlan{cache: cache, cacheKey: key}
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{name: "empty content", content: ""},
+		{name: "whitespace-only content", content: "  \n\t \n"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			plan.storeCache(llm.Response{Content: tt.content, Risk: llm.Risk{Level: "low"}})
+			if _, ok, err := cache.Get(key); err != nil {
+				t.Fatalf("cache.Get: %v", err)
+			} else if ok {
+				t.Fatal("empty response was written to the cache; it must be skipped")
+			}
+		})
+	}
+
+	// Sanity: a real response with the same plan/key IS cached.
+	plan.storeCache(llm.Response{Content: "a real review body", Risk: llm.Risk{Level: "low"}})
+	resp, ok, err := cache.Get(key)
+	if err != nil {
+		t.Fatalf("cache.Get after non-empty put: %v", err)
+	}
+	if !ok {
+		t.Fatal("non-empty response should be cached")
+	}
+	if resp.Content != "a real review body" {
+		t.Errorf("cached Content = %q, want %q", resp.Content, "a real review body")
 	}
 }

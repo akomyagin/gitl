@@ -171,9 +171,16 @@ func (p *reviewPlan) lookupCache() (render.Artifact, bool) {
 }
 
 // storeCache persists a provider response for later lookupCache hits. A put
-// failure is debug-logged, never fatal.
+// failure is debug-logged, never fatal. Empty/whitespace-only content is never
+// cached (defense in depth): the cache key is shared by every path — buffered
+// CLI, --no-stream, streaming, MCP gitl_review — so one degenerate response
+// would otherwise poison them all for the whole TTL.
 func (p *reviewPlan) storeCache(resp llm.Response) {
 	if p.cache == nil || p.cacheKey == "" {
+		return
+	}
+	if strings.TrimSpace(resp.Content) == "" {
+		slog.Debug("llm cache put skipped: empty response content")
 		return
 	}
 	if err := p.cache.Put(p.cacheKey, resp); err != nil {
