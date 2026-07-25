@@ -32,6 +32,18 @@ inputs:
       Cost guard passed through to `gitl review --max-cost-usd`. <=0 disables it.
     required: false
     default: "0.50"
+  update-pr-description:
+    description: >-
+      When "true" (also accepts "1"/"yes", case-insensitive), additionally
+      maintain a compact risk-summary block inside the PR description,
+      delimited by "<!-- gitl-review-summary -->" markers; text outside the
+      markers is never touched. Off by default — editing the description is
+      more intrusive than the sticky comment, so it's explicit opt-in (same
+      principle as fail-on). Needs no extra permissions: `pull-requests:
+      write`, already required for the comment, also covers the PR body.
+      GitHub only for now (ignored on Gitea Actions).
+    required: false
+    default: "false"
   gitl-version:
     description: >-
       Git ref of akomyagin/gitl to install (tag/branch/SHA). Release tags
@@ -190,6 +202,7 @@ runs:
         GITL_HEAD_SHA: ${{ inputs.head-sha || github.event.pull_request.head.sha }}
         GITL_FAIL_ON: ${{ inputs.fail-on }}
         GITL_MAX_COST_USD: ${{ inputs.max-cost-usd }}
+        GITL_UPDATE_PR_DESCRIPTION: ${{ inputs.update-pr-description }}
         GITL_PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
         GITL_LLM_PROVIDER: ${{ inputs.provider }}
         GITL_LLM_MODEL: ${{ inputs.model }}
@@ -229,14 +242,28 @@ runs:
           --max-cost-usd="$GITL_MAX_COST_USD" \
           > review.json || review_exit=$?
 
+        # Normalize the update-pr-description opt-in once, up front:
+        # true/1/yes (any case) enable it, anything else — including the
+        # default "false" and empty — leaves it off. The normalized 1/0 is
+        # also what GITL_EMIT_SUMMARY receives below, so ci/comment.sh only
+        # renders the summary fragment when it will actually be used
+        # (comment.sh treats anything but "1" as off).
+        update_pr_description=0
+        case "$(printf '%s' "${GITL_UPDATE_PR_DESCRIPTION:-}" | tr '[:upper:]' '[:lower:]')" in
+          true | 1 | yes) update_pr_description=1 ;;
+        esac
+
         # Build the PR comment (comment.md) from review.json — including the
         # fallback notice when gitl itself failed. This rendering logic is
         # platform-neutral and shared with future Gitea/GitLab/Bitbucket
         # wrappers, so it lives in ci/comment.sh; only the run-URL below is
-        # GitHub-specific, passed in as an opaque GITL_CI_RUN_URL.
+        # GitHub-specific, passed in as an opaque GITL_CI_RUN_URL. With the
+        # opt-in enabled it also emits pr-summary.md, the host-agnostic
+        # fragment merged into the PR description further down.
         GITL_RANGE="$GITL_RANGE" \
         GITL_REVIEW_EXIT="$review_exit" \
         GITL_CI_RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+        GITL_EMIT_SUMMARY="$update_pr_description" \
           bash "${GITL_ACTION_PATH}/ci/comment.sh"
 
         # Post the review BEFORE propagating the risk-gate exit code, so a
@@ -319,6 +346,7 @@ runs:
               "${GITL_API_URL}/repos/${GITHUB_REPOSITORY}/issues/${GITL_PR_NUMBER}/comments" \
               > /dev/null
           fi
+          # TODO(gitea): PR description update not yet implemented
         else
           # Explicit asc sort + `last` keeps "most recent match wins"
           # semantics regardless of the API's default ordering (same pattern
@@ -343,6 +371,37 @@ runs:
               --input comment.json
           else
             gh pr comment "$GITL_PR_NUMBER" --body-file comment.md
+          fi
+
+          # Opt-in PR description update: merge the pr-summary.md fragment
+          # (rendered by ci/comment.sh above) into the PR body, replacing
+          # only the <!-- gitl-review-summary --> block — text outside the
+          # markers is never touched, and malformed/unpaired markers make
+          # the merge script append a fresh block instead of editing in
+          # place (defensive: never risk deleting human text). Ordered
+          # AFTER the comment is posted but BEFORE `exit "$review_exit"`
+          # below — same "show reasoning before failing" principle. The PR
+          # body lives on the pulls endpoint (not issues, which is only for
+          # comments); `pull-requests: write`, already required for the
+          # comment, covers PATCHing it too — no new permissions.
+          # Deliberately NOT `gh pr edit --body-file`: that infers the PR
+          # from the current checkout's branch/remote, while `gh api` takes
+          # the explicit repo/number we already resolved.
+          if [ "$update_pr_description" = "1" ]; then
+            # warn-and-continue on any failure: the description block is a
+            # convenience, not a gate — a permissions hiccup here must not
+            # turn a successful review into a failed job.
+            if gh api "repos/${GITHUB_REPOSITORY}/pulls/${GITL_PR_NUMBER}" \
+                --jq '.body // ""' > pr-body.md \
+              && bash "${GITL_ACTION_PATH}/ci/pr-summary-merge.sh" pr-body.md pr-summary.md > pr-body-merged.md \
+              && jq -Rs '{body: .}' pr-body-merged.md > pr-body.json \
+              && gh api "repos/${GITHUB_REPOSITORY}/pulls/${GITL_PR_NUMBER}" \
+                --method PATCH \
+                --input pr-body.json > /dev/null; then
+              echo "gitl: PR description risk summary updated."
+            else
+              echo "::warning::gitl: failed to update the PR description risk summary — continuing (the sticky comment is unaffected)."
+            fi
           fi
         fi
 
