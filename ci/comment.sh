@@ -43,7 +43,12 @@ if jq -e . "$review_json" > /dev/null 2>&1; then
     echo "<!-- gitl-review -->"
     echo "## gitl review \`$GITL_RANGE\`"
     echo
-    jq -r '"**Risk:** " + (.risk.level | ascii_upcase) + " — " + .risk.summary + (if .risk.heuristic then " *(heuristic)*" else "" end)' "$review_json"
+    # Separator only when the summary is non-empty, mirroring the Go renderer
+    # (internal/render/render.go riskHeader): ParseRisk accepts an empty
+    # summary, and "**Risk:** HIGH — " with a dangling dash looks broken. The
+    # field itself is always present in the artifact (no omitempty on
+    # jsonRisk.Summary), so a plain != "" check is enough.
+    jq -r '"**Risk:** " + (.risk.level | ascii_upcase) + (if .risk.summary != "" then " — " + .risk.summary else "" end) + (if .risk.heuristic then " *(heuristic)*" else "" end)' "$review_json"
     echo
     jq -r '.review_markdown' "$review_json"
   } > "$comment_file"
