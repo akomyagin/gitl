@@ -149,13 +149,33 @@ gitl-review:
         echo "Installed gitl ${GITL_VERSION} from prebuilt binary (checksum verified)"
       }
 
+      # `go install` resolves a branch/SHA ref through proxy.golang.org and
+      # verifies it against sum.golang.org — both can lag behind a commit
+      # pushed only seconds earlier, surfacing as a transient
+      # "reading https://sum.golang.org/...: 500" failure. Retry with
+      # backoff rather than failing the job outright — the propagation delay
+      # is normally gone within a minute or two.
+      go_install_with_retry() {
+        local attempt=1 max_attempts=5 delay=10
+        until go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"; do
+          if [ "$attempt" -ge "$max_attempts" ]; then
+            echo "ERROR: go install failed after ${max_attempts} attempts." >&2
+            return 1
+          fi
+          echo "WARNING: go install attempt ${attempt}/${max_attempts} failed (likely proxy.golang.org/sum.golang.org propagation delay) — retrying in ${delay}s..." >&2
+          sleep "$delay"
+          attempt=$((attempt + 1))
+          delay=$((delay * 2))
+        done
+      }
+
       if [[ "$GITL_VERSION" =~ ^v[0-9] ]]; then
         if ! install_prebuilt; then
           echo "WARNING: prebuilt gitl binary for ${GITL_VERSION} unavailable or failed checksum verification — falling back to 'go install' (source build)." >&2
-          go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"
+          go_install_with_retry
         fi
       else
-        go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"
+        go_install_with_retry
       fi
 
       # jq is needed by ci/comment.sh and by the sticky-comment logic below;

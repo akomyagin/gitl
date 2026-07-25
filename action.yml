@@ -126,7 +126,27 @@ runs:
           fi
           echo "::warning::gitl: prebuilt binary for ${GITL_VERSION} unavailable or failed checksum verification — falling back to 'go install' (source build)."
         fi
-        go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"
+
+        # `go install` resolves a branch/SHA ref through proxy.golang.org and
+        # verifies it against sum.golang.org — both can lag behind a commit
+        # pushed only seconds earlier (the common case: installing a PR's own
+        # just-pushed head SHA), surfacing as a transient
+        # "reading https://sum.golang.org/...: 500" failure. Retry with
+        # backoff rather than failing the run outright — the propagation
+        # delay is normally gone within a minute or two.
+        attempt=1
+        max_attempts=5
+        delay=10
+        until go install "github.com/akomyagin/gitl/cmd/gitl@${GITL_VERSION}"; do
+          if [ "$attempt" -ge "$max_attempts" ]; then
+            echo "::error::go install failed after ${max_attempts} attempts."
+            exit 1
+          fi
+          echo "::warning::go install attempt ${attempt}/${max_attempts} failed (likely proxy.golang.org/sum.golang.org propagation delay) — retrying in ${delay}s..."
+          sleep "$delay"
+          attempt=$((attempt + 1))
+          delay=$((delay * 2))
+        done
 
     - name: Run gitl review and post PR comment
       shell: bash
