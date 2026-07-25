@@ -1,4 +1,4 @@
-# CI-скелет (Этап 0). Расширяется на последующих этапах (lint, -race, golden).
+# CI-скелет (Этап 0). Расширяется на последующих этапах (lint, golden).
 name: CI
 
 on:
@@ -26,4 +26,7 @@ jobs:
         run: go vet ./...
 
       - name: Test
-        run: go test ./...
+        # -race project-wide: the digest worker-pool (internal/gitlog) is
+        # genuinely concurrent, and the suite is small enough that the race
+        # detector's overhead is negligible.
+        run: go test -race ./...
