@@ -387,6 +387,9 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 		}
 		// Zero bytes written: safe to fall back to the buffered path.
 		slog.Info("streaming failed before first token, falling back to non-streaming", "err", streamErr)
+	} else if !ok && wantStream(cmd, cfg) {
+		slog.Warn("provider does not support streaming; buffering full response",
+			"provider", cfg.LLM.Provider)
 	}
 
 	art, err := plan.complete(ctx, provider)
