@@ -272,9 +272,23 @@ jobs:
           GITLAB_MIRROR_URL: ${{ secrets.GITLAB_MIRROR_URL }}
         run: |
           if [ -z "$GITLAB_MIRROR_URL" ]; then
-            echo "::warning::GITLAB_MIRROR_URL secret is not set — skipping GitLab mirror push (needed to publish templates/gitl-review.yml to the CI/CD Catalog). Create it: a GitLab project/personal access token (scope write_repository) embedded in the HTTPS clone URL, e.g. https://oauth2:<token>@gitlab.com/<namespace>/<project>.git, to enable."
+            echo "::warning::GITLAB_MIRROR_URL secret is not set — skipping GitLab mirror push (needed to publish templates/gitl-review.yml to the CI/CD Catalog). Create it: a GitLab project/personal access token (scope write_repository) embedded in the HTTPS clone URL, exactly of the form https://oauth2:<token>@gitlab.com/<namespace>/<project>.git, to enable."
             echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
+          # A present-but-malformed secret is a misconfiguration to fix, not a
+          # "not set up yet" case — hard-fail here, BEFORE any push. git itself
+          # accepts many credential-embedding URL forms, so a differently-but-
+          # validly-shaped secret would push fine and only break later, in the
+          # "Create GitLab Release" step, whose bash parameter expansion
+          # extracts the token assuming exactly this shape.
+          case "$GITLAB_MIRROR_URL" in
+            https://oauth2:*@*/*) : ;;
+            *)
+              echo "::error::GITLAB_MIRROR_URL must be exactly of the form https://oauth2:<token>@<host>/<namespace>/<project>.git — other git-URL forms would push fine but break GitLab Release creation (token extraction)."
+              exit 1
+              ;;
+          esac
 
       - name: Push to GitLab mirror
         if: steps.mirror_check.outputs.skip != 'true'
@@ -288,8 +302,13 @@ jobs:
           GITLAB_MIRROR_URL: ${{ secrets.GITLAB_MIRROR_URL }}
         run: |
           set -euo pipefail
-          git push "$GITLAB_MIRROR_URL" "HEAD:refs/heads/master" --force
-          git push "$GITLAB_MIRROR_URL" "refs/tags/${GITHUB_REF_NAME}"
+          # Single push, two refspecs. The leading "+" applies force semantics
+          # per-refspec (git-push(1)), unlike a blanket --force which would
+          # force every refspec on the command line: master is intentionally
+          # forced (GitHub is the sole source of truth, see the job comment
+          # above), while the tag refspec stays non-force — tags are immutable,
+          # so overwriting an existing one must be rejected, never silent.
+          git push "$GITLAB_MIRROR_URL" "+HEAD:refs/heads/master" "refs/tags/${GITHUB_REF_NAME}"
 
       # The CI/CD Catalog lists a project's Releases, not its tags — pushing
       # the tag above is necessary but not sufficient. This creates the
