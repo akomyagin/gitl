@@ -63,9 +63,7 @@ const reviewToolSchema = `{
     "range": {"type": "string", "description": "Git revision range to review, e.g. HEAD~5..HEAD"},
     "pr": {"type": "integer", "minimum": 1, "description": "GitHub pull request number to review (requires the gh CLI, installed and authenticated)"},
     "staged": {"type": "boolean", "description": "Review the staged (indexed, not yet committed) changes"},
-    "provider": {"type": "string", "description": "Override the configured LLM provider for this call (openai | ollama | azure_openai | anthropic | gemini)"},
-    "model": {"type": "string", "description": "Override the configured model name for this call"},
-    "base_url": {"type": "string", "description": "Override the configured LLM API base URL for this call"}
+    "model": {"type": "string", "description": "Override the configured model name for this call"}
   },
   "additionalProperties": false
 }`
@@ -110,13 +108,19 @@ func registerMCPTools(srv *mcpserver.Server, cfg *config.Config, errOut io.Write
 // reviewToolArgs is the parsed arguments object of a gitl_review call. PR is a
 // pointer so an explicit `"pr": 0` is distinguishable from an absent field and
 // gets the "invalid PR number" error instead of silently selecting no mode.
+//
+// Deliberately NO provider/base_url overrides here (they existed once): the
+// caller of an MCP tool is an AI agent, which can be steered by prompt
+// injection inside the very content it reviews — a per-call base_url would let
+// a malicious commit body redirect the request, sending the user's real API
+// key to an attacker-controlled endpoint. Only the model name (same provider,
+// same endpoint, same key scope) may be overridden per call; decodeToolArgs
+// rejects the removed fields loudly via DisallowUnknownFields.
 type reviewToolArgs struct {
-	Range    string `json:"range"`
-	PR       *int   `json:"pr"`
-	Staged   bool   `json:"staged"`
-	Provider string `json:"provider"`
-	Model    string `json:"model"`
-	BaseURL  string `json:"base_url"`
+	Range  string `json:"range"`
+	PR     *int   `json:"pr"`
+	Staged bool   `json:"staged"`
+	Model  string `json:"model"`
 }
 
 // mcpReviewHandler returns the gitl_review tool handler.
@@ -150,21 +154,13 @@ func mcpReviewHandler(cfg *config.Config, errOut io.Writer) mcpserver.ToolHandle
 			arg = fmt.Sprintf("pr/%d", *a.PR)
 		}
 
-		// Per-call provider/model/base_url overrides operate on a value copy of
-		// the startup config — the same llm.* keys the --provider/--model/
-		// --base-url flags bind to — so per-call overrides never leak into
-		// later calls and the shared cfg stays untouched. Note: as with the CLI
-		// flags, overriding provider alone keeps the configured base_url;
-		// override base_url too when the provider needs a different endpoint.
+		// The per-call model override operates on a value copy of the startup
+		// config, so it never leaks into later calls and the shared cfg stays
+		// untouched. Provider and base_url are NOT overridable per call — see
+		// the reviewToolArgs comment for the key-safety rationale.
 		c := *cfg
-		if a.Provider != "" {
-			c.LLM.Provider = a.Provider
-		}
 		if a.Model != "" {
 			c.LLM.Model = a.Model
-		}
-		if a.BaseURL != "" {
-			c.LLM.BaseURL = a.BaseURL
 		}
 
 		src, err := resolveReviewSource(ctx, arg, a.Staged)

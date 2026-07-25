@@ -102,20 +102,40 @@ func prepareReview(cfg *config.Config, src diffSource, opts ReviewOptions) (*rev
 
 	// LLM response cache (Item 5): only active for network reviews — offline
 	// mode is already deterministic and free, so it is never cached.
-	// The key hashes provider+model+system+user, and the user message embeds
-	// the full diff — so staged mode is content-addressed by the staged diff
-	// itself (no range exists to key on): re-running with the same index hits
-	// the cache, any `git add` changes the diff and therefore the key.
+	// The key hashes every request parameter (see llmCacheKey), and the user
+	// message embeds the full diff — so staged mode is content-addressed by the
+	// staged diff itself (no range exists to key on): re-running with the same
+	// index hits the cache, any `git add` changes the diff and therefore the key.
 	useCache := cfg.Cache.Enabled && !opts.NoCache && !cfg.OfflineMode() && cfg.Cache.TTLHours > 0
 	if useCache {
 		if c, cerr := llmcache.New(time.Duration(cfg.Cache.TTLHours) * time.Hour); cerr == nil {
 			plan.cache = c
-			plan.cacheKey = llmcache.Key(cfg.LLM.Provider, cfg.LLM.Model, system, user)
+			plan.cacheKey = llmCacheKey(cfg, system, user)
 		} else {
 			slog.Debug("llm cache unavailable", "err", cerr)
 		}
 	}
 	return plan, nil
+}
+
+// llmCacheKey builds the LLM response cache key from every cfg.LLM parameter
+// that can change the response: provider, model, the RESOLVED base_url
+// (config.Load fills provider defaults in before any command runs), the Azure
+// coordinates, the sampling parameters, and the prompts. Shared by review and
+// changelog --ai so the two cached paths can never diverge on key composition.
+func llmCacheKey(cfg *config.Config, system, user string) string {
+	return llmcache.Key(llmcache.KeyParams{
+		Provider:        cfg.LLM.Provider,
+		Model:           cfg.LLM.Model,
+		BaseURL:         cfg.LLM.BaseURL,
+		AzureEndpoint:   cfg.LLM.AzureOpenAI.Endpoint,
+		AzureDeployment: cfg.LLM.AzureOpenAI.Deployment,
+		AzureAPIVersion: cfg.LLM.AzureOpenAI.APIVersion,
+		System:          system,
+		User:            user,
+		Temperature:     cfg.LLM.Temperature,
+		MaxTokens:       cfg.LLM.MaxTokens,
+	})
 }
 
 // promptText is the full prompt as fed to the cost estimator (§8.3/§8.4).

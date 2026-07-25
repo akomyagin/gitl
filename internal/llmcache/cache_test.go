@@ -11,6 +11,11 @@ import (
 	"github.com/akomyagin/gitl/internal/llm"
 )
 
+// testKey is the baseline key used by the store (Get/Put) tests.
+func testKey() string {
+	return Key(KeyParams{Provider: "openai", Model: "gpt-4o", System: "sys", User: "usr"})
+}
+
 func sampleResponse() llm.Response {
 	return llm.Response{
 		Content: "review body",
@@ -24,7 +29,7 @@ func sampleResponse() llm.Response {
 
 func TestMissPutHit(t *testing.T) {
 	c := NewInDir(t.TempDir(), 24*time.Hour)
-	key := Key("openai", "gpt-4o", "sys", "usr")
+	key := testKey()
 
 	if _, ok, err := c.Get(key); ok || err != nil {
 		t.Fatalf("expected miss, got ok=%v err=%v", ok, err)
@@ -49,7 +54,7 @@ func TestMissPutHit(t *testing.T) {
 
 func TestExpiry(t *testing.T) {
 	c := NewInDir(t.TempDir(), 24*time.Hour)
-	key := Key("openai", "gpt-4o", "sys", "usr")
+	key := testKey()
 	if err := c.Put(key, sampleResponse()); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
@@ -83,7 +88,7 @@ func TestExpiry(t *testing.T) {
 
 func TestConcurrentPut(t *testing.T) {
 	c := NewInDir(t.TempDir(), 24*time.Hour)
-	key := Key("openai", "gpt-4o", "sys", "usr")
+	key := testKey()
 	resp := sampleResponse()
 
 	const n = 8
@@ -111,17 +116,61 @@ func TestConcurrentPut(t *testing.T) {
 	}
 }
 
-func TestKeyDifferentProviders(t *testing.T) {
-	s, u := "sys", "usr"
-	if Key("openai", "gpt-4o", s, u) == Key("ollama", "llama3", s, u) {
-		t.Fatal("keys must differ across providers")
+// TestKeyFieldSensitivity: changing ANY single KeyParams field must change the
+// key (a collision would silently serve the wrong provider's/endpoint's/
+// parameters' cached response), while identical params must be stable.
+func TestKeyFieldSensitivity(t *testing.T) {
+	base := KeyParams{
+		Provider:        "openai",
+		Model:           "gpt-4o",
+		BaseURL:         "https://api.openai.com/v1",
+		AzureEndpoint:   "https://acct.openai.azure.com",
+		AzureDeployment: "prod-gpt4o",
+		AzureAPIVersion: "2024-06-01",
+		System:          "sys",
+		User:            "usr",
+		Temperature:     0.2,
+		MaxTokens:       1500,
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(p *KeyParams)
+	}{
+		{"provider", func(p *KeyParams) { p.Provider = "ollama" }},
+		{"model", func(p *KeyParams) { p.Model = "gpt-4o-mini" }},
+		{"base_url", func(p *KeyParams) { p.BaseURL = "http://localhost:11434/v1" }},
+		{"azure_endpoint", func(p *KeyParams) { p.AzureEndpoint = "https://other.openai.azure.com" }},
+		{"azure_deployment", func(p *KeyParams) { p.AzureDeployment = "staging-gpt4o" }},
+		{"azure_api_version", func(p *KeyParams) { p.AzureAPIVersion = "2024-10-01" }},
+		{"system", func(p *KeyParams) { p.System = "sys2" }},
+		{"user", func(p *KeyParams) { p.User = "usr2" }},
+		{"temperature", func(p *KeyParams) { p.Temperature = 0.7 }},
+		{"max_tokens", func(p *KeyParams) { p.MaxTokens = 2000 }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mutated := base
+			tt.mutate(&mutated)
+			if Key(mutated) == Key(base) {
+				t.Errorf("keys must differ when only %s differs", tt.name)
+			}
+		})
+	}
+
+	if Key(base) != Key(base) {
+		t.Error("identical params must produce identical keys")
 	}
 }
 
-func TestKeyDifferentModels(t *testing.T) {
-	s, u := "sys", "usr"
-	if Key("openai", "gpt-4o", s, u) == Key("openai", "gpt-4o-mini", s, u) {
-		t.Fatal("keys must differ across models")
+// TestKeyFieldsUnambiguous guards the NUL-separator join: shifting content
+// across a field boundary must not produce the same key (naive concatenation
+// would make {"ab","c"} collide with {"a","bc"}).
+func TestKeyFieldsUnambiguous(t *testing.T) {
+	a := KeyParams{Provider: "ab", Model: "c"}
+	b := KeyParams{Provider: "a", Model: "bc"}
+	if Key(a) == Key(b) {
+		t.Error("field boundaries must be unambiguous in the hashed canonical form")
 	}
 }
 
@@ -144,7 +193,7 @@ func TestShortKeyReturnsError(t *testing.T) {
 
 func TestNewCacheDirCreated(t *testing.T) {
 	c := NewInDir(filepath.Join(t.TempDir(), "sub", "dir"), time.Hour)
-	key := Key("openai", "gpt-4o", "sys", "usr")
+	key := testKey()
 
 	if err := c.Put(key, sampleResponse()); err != nil {
 		t.Fatalf("Put: %v", err)

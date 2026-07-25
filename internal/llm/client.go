@@ -62,6 +62,24 @@ const (
 	ProviderAzure  = "azure_openai"
 )
 
+// Native default endpoints for the providers whose base URL is resolved at
+// config-load time (config.Load fills llm.base_url in when the merged value is
+// empty). Anthropic and Gemini keep their own unexported defaults inside their
+// client constructors instead; azure_openai builds its URL from the
+// llm.azure_openai.* block and never uses base_url.
+const (
+	DefaultOpenAIBaseURL = "https://api.openai.com/v1"
+	DefaultOllamaBaseURL = "http://localhost:11434/v1"
+)
+
+// ProviderRequiresKey reports whether a provider needs an API key to make
+// network calls. Only ollama is keyless (self-hosted, no auth header — see
+// setAuth); every other identifier, including unrecognized ones, requires a
+// key, so an empty api_key safely means offline mode for them.
+func ProviderRequiresKey(provider string) bool {
+	return provider != ProviderOllama
+}
+
 // StatusError is a typed HTTP error carrying the status code and whether the
 // request is worth retrying. It is used with errors.As so retry classification
 // never relies on string matching.

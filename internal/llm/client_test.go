@@ -401,3 +401,29 @@ func TestExtractErrorMessage(t *testing.T) {
 		t.Errorf("extractErrorMessage produced invalid UTF-8: %q", got)
 	}
 }
+
+// TestProviderRequiresKey: only ollama (self-hosted, no auth header) is
+// keyless; every other identifier — including unrecognized ones — requires a
+// key, so config.OfflineMode safely treats an empty api_key as offline for
+// them.
+func TestProviderRequiresKey(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		provider string
+		want     bool
+	}{
+		{ProviderOllama, false},
+		{ProviderOpenAI, true},
+		{ProviderAzure, true},
+		{ProviderAnthropic, true},
+		{ProviderGemini, true},
+		{"unknown-provider", true},
+		{"", true},
+	}
+	for _, tt := range tests {
+		if got := ProviderRequiresKey(tt.provider); got != tt.want {
+			t.Errorf("ProviderRequiresKey(%q) = %v, want %v", tt.provider, got, tt.want)
+		}
+	}
+}

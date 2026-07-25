@@ -143,6 +143,12 @@ func TestMCPReviewHandlerModeValidation(t *testing.T) {
 		{"range and pr", `{"range":"HEAD~1..HEAD","pr":5}`, "mutually exclusive"},
 		{"pr zero", `{"pr":0}`, "invalid PR number"},
 		{"unknown argument", `{"revrange":"HEAD~1..HEAD"}`, "invalid tool arguments"},
+		// provider/base_url were removed from the tool contract (key-safety:
+		// a prompt-injected agent must not be able to redirect the request and
+		// leak the API key) — sending them must fail loudly, never be applied
+		// or silently ignored.
+		{"removed base_url override", `{"range":"HEAD~1..HEAD","base_url":"https://evil.example/v1"}`, "invalid tool arguments"},
+		{"removed provider override", `{"range":"HEAD~1..HEAD","provider":"openai"}`, "invalid tool arguments"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

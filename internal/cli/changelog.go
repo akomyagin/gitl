@@ -144,7 +144,7 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 	if useCache {
 		if c, cerr := llmcache.New(time.Duration(cfg.Cache.TTLHours) * time.Hour); cerr == nil {
 			cache = c
-			cacheKey = llmcache.Key(cfg.LLM.Provider, cfg.LLM.Model, system, user)
+			cacheKey = llmCacheKey(cfg, system, user)
 			if resp, ok, _ := cache.Get(cacheKey); ok {
 				if payload, pok := llm.ParseChangelogResponse(resp.Content); pok {
 					slog.Debug("llm cache hit", "key", cacheKey[:12])

@@ -4,8 +4,9 @@
 // flag > env > .gitl.yaml (repo, cwd) > ~/.config/gitl/config.yaml (personal),
 // via a per-call viper instance → struct Config. The personal path comes from
 // os.UserConfigDir() (never a hardcoded ~/.config; on Windows → %AppData%\gitl).
-// An empty api_key selects offline mode (a warning is printed to stderr by the
-// caller — Load does not fail).
+// An empty api_key selects offline mode for providers that require a key (a
+// warning is printed to stderr by the caller — Load does not fail); keyless
+// ollama stays on the network path.
 //
 // The cost:/output:/policy:/diff: blocks and provider branching (openai /
 // ollama / azure_openai) are all wired into behavior as of Этап 2 (см.
@@ -59,8 +60,13 @@ type PromptConfig struct {
 
 // LLMConfig configures the LLM provider and request parameters.
 type LLMConfig struct {
-	Provider       string  `mapstructure:"provider"`
-	APIKey         string  `mapstructure:"api_key"`
+	Provider string `mapstructure:"provider"`
+	APIKey   string `mapstructure:"api_key"`
+	// BaseURL is the API endpoint. Empty means "use the provider's native
+	// default endpoint": Load resolves openai/ollama defaults itself (see
+	// applyProviderBaseURL), anthropic/gemini clients apply their own native
+	// defaults in their constructors, and azure_openai ignores base_url
+	// entirely (its URL is built from the AzureOpenAI block).
 	BaseURL        string  `mapstructure:"base_url"`
 	Model          string  `mapstructure:"model"`
 	MaxTokens      int     `mapstructure:"max_tokens"`
@@ -158,14 +164,25 @@ type Options struct {
 // layer beneath the personal file, repo file, env, and flags.
 func defaults() map[string]any {
 	return map[string]any{
-		"llm.provider":                         "openai",
-		"llm.api_key":                          "",
-		"llm.base_url":                         "https://api.openai.com/v1",
-		"llm.model":                            "gpt-4o-mini",
-		"llm.max_tokens":                       1500,
-		"llm.temperature":                      0.2,
-		"llm.timeout_seconds":                  60,
-		"llm.max_retries":                      3,
+		"llm.provider": "openai",
+		"llm.api_key":  "",
+		// Empty on purpose: the provider-specific default endpoint is resolved
+		// AFTER the merge (applyProviderBaseURL). A hardcoded OpenAI URL here
+		// would override the anthropic/gemini clients' own native defaults and
+		// send their auth headers to api.openai.com.
+		"llm.base_url":        "",
+		"llm.model":           "gpt-4o-mini",
+		"llm.max_tokens":      1500,
+		"llm.temperature":     0.2,
+		"llm.timeout_seconds": 60,
+		"llm.max_retries":     3,
+		// Registered (empty) so viper's AutomaticEnv surfaces the
+		// GITL_LLM_AZURE_OPENAI_* env vars — env vars are only consulted for
+		// keys viper already knows about (same quirk as the policy list keys,
+		// see TestEnvPolicyListKeys).
+		"llm.azure_openai.endpoint":            "",
+		"llm.azure_openai.deployment":          "",
+		"llm.azure_openai.api_version":         "",
 		"cost.max_cost_usd":                    0.50,
 		"cost.warn_at_usd":                     0.10,
 		"cost.price_per_1m_input":              0.0,
@@ -258,8 +275,32 @@ func Load(opts Options) (*Config, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	cfg.applyProviderBaseURL()
 	cfg.resolveDigestRepoPaths(repoDir)
 	return &cfg, nil
+}
+
+// applyProviderBaseURL fills in llm.base_url when the merged config left it
+// empty, based on the provider — so an explicit file/env/flag value always
+// wins, and each provider's requests go to its OWN native endpoint by default.
+// Anthropic/gemini stay empty here: their client constructors apply their own
+// native defaults, and pre-filling the OpenAI URL for them is exactly the
+// key-leak bug this method exists to prevent. azure_openai never uses base_url
+// (its URL comes from llm.azure_openai.*).
+func (c *Config) applyProviderBaseURL() {
+	if c.LLM.BaseURL != "" {
+		return
+	}
+	switch c.LLM.Provider {
+	case llm.ProviderOllama:
+		c.LLM.BaseURL = llm.DefaultOllamaBaseURL
+	case llm.ProviderAnthropic, llm.ProviderGemini, llm.ProviderAzure:
+		// Left empty on purpose (see above).
+	default:
+		// openai — and any unrecognized provider, which llm.NewClient rejects
+		// with a configuration error before this URL is ever used.
+		c.LLM.BaseURL = llm.DefaultOpenAIBaseURL
+	}
 }
 
 // resolveDigestRepoPaths makes every digest.repos[].path absolute relative to
@@ -400,7 +441,10 @@ func validateTemplateFile(key, path string, funcs template.FuncMap) error {
 }
 
 // OfflineMode reports whether gitl should use the deterministic offline
-// provider instead of the network client (i.e. no API key is configured).
+// provider instead of the network client: no API key is configured AND the
+// provider actually needs one. A keyless ollama config (the documented
+// self-hosted setup) is NOT offline — it goes through the real network path,
+// where the cost guard already treats ollama as free.
 func (c *Config) OfflineMode() bool {
-	return c.LLM.APIKey == ""
+	return c.LLM.APIKey == "" && llm.ProviderRequiresKey(c.LLM.Provider)
 }

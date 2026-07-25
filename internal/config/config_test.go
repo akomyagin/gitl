@@ -42,6 +42,130 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+// TestApplyProviderBaseURL: an empty llm.base_url must resolve to the
+// provider's OWN native default endpoint after Load — never to the OpenAI URL
+// for anthropic/gemini (the old unconditional default sent their auth headers,
+// key included, to api.openai.com) — while an explicit config value always
+// wins over any default.
+func TestApplyProviderBaseURL(t *testing.T) {
+	tests := []struct {
+		name     string
+		provider string
+		baseURL  string // configured value; "" = omitted
+		want     string
+	}{
+		{"openai empty", "openai", "", "https://api.openai.com/v1"},
+		{"openai explicit", "openai", "https://proxy.example/v1", "https://proxy.example/v1"},
+		{"ollama empty", "ollama", "", "http://localhost:11434/v1"},
+		{"ollama explicit", "ollama", "http://gpu-box:11434/v1", "http://gpu-box:11434/v1"},
+		{"anthropic empty", "anthropic", "", ""},
+		{"anthropic explicit", "anthropic", "https://claude-proxy.example", "https://claude-proxy.example"},
+		{"gemini empty", "gemini", "", ""},
+		{"gemini explicit", "gemini", "https://gemini-proxy.example", "https://gemini-proxy.example"},
+		{"azure empty", "azure_openai", "", ""},
+		{"azure explicit", "azure_openai", "https://ignored.example", "https://ignored.example"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			yaml := "llm:\n  provider: " + tt.provider + "\n"
+			if tt.baseURL != "" {
+				yaml += "  base_url: \"" + tt.baseURL + "\"\n"
+			}
+			personalPath := filepath.Join(dir, "config.yaml")
+			writeFile(t, personalPath, yaml)
+
+			cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.LLM.BaseURL != tt.want {
+				t.Errorf("base_url = %q, want %q", cfg.LLM.BaseURL, tt.want)
+			}
+		})
+	}
+}
+
+// TestBaseURLFlagWinsOverProviderDefault: an explicitly-set --base-url flag
+// must survive the provider-default resolution, exactly like a file value.
+func TestBaseURLFlagWinsOverProviderDefault(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "llm:\n  provider: ollama\n")
+
+	flags := pflag.NewFlagSet("test", pflag.ContinueOnError)
+	flags.String("base-url", "", "")
+	if err := flags.Parse([]string{"--base-url", "http://flag-host:11434/v1"}); err != nil {
+		t.Fatalf("parse flags: %v", err)
+	}
+
+	cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath, Flags: flags})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LLM.BaseURL != "http://flag-host:11434/v1" {
+		t.Errorf("base_url = %q, want the explicit flag value to win over the ollama default", cfg.LLM.BaseURL)
+	}
+}
+
+// TestOfflineModeProviderAware: an empty api_key means offline mode only for
+// providers that actually need a key — the documented keyless ollama setup
+// must reach the real network path, not silently degrade to the offline
+// heuristic. Unknown providers default to "requires a key" (safe).
+func TestOfflineModeProviderAware(t *testing.T) {
+	tests := []struct {
+		provider string
+		apiKey   string
+		want     bool
+	}{
+		{"openai", "", true},
+		{"openai", "sk-x", false},
+		{"ollama", "", false},
+		{"ollama", "dummy", false},
+		{"anthropic", "", true},
+		{"gemini", "", true},
+		{"azure_openai", "", true},
+		{"unknown-provider", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.provider+"/key="+tt.apiKey, func(t *testing.T) {
+			cfg := &Config{LLM: LLMConfig{Provider: tt.provider, APIKey: tt.apiKey}}
+			if got := cfg.OfflineMode(); got != tt.want {
+				t.Errorf("OfflineMode() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestEnvAzureOpenAIKeys proves the three Azure sub-keys are reachable via
+// env. Same viper quirk as TestEnvPolicyListKeys: AutomaticEnv only consults
+// env vars for keys registered in defaults(), so without the empty
+// llm.azure_openai.* defaults these env vars were silently ignored.
+func TestEnvAzureOpenAIKeys(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Setenv("GITL_LLM_AZURE_OPENAI_ENDPOINT", "https://acct.openai.azure.com")
+	t.Setenv("GITL_LLM_AZURE_OPENAI_DEPLOYMENT", "prod-gpt4o")
+	t.Setenv("GITL_LLM_AZURE_OPENAI_API_VERSION", "2024-06-01")
+
+	cfg, err := Load(Options{
+		RepoDir:      dir,
+		PersonalPath: filepath.Join(dir, "does-not-exist.yaml"),
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LLM.AzureOpenAI.Endpoint != "https://acct.openai.azure.com" {
+		t.Errorf("azure endpoint = %q, want the env value", cfg.LLM.AzureOpenAI.Endpoint)
+	}
+	if cfg.LLM.AzureOpenAI.Deployment != "prod-gpt4o" {
+		t.Errorf("azure deployment = %q, want the env value", cfg.LLM.AzureOpenAI.Deployment)
+	}
+	if cfg.LLM.AzureOpenAI.APIVersion != "2024-06-01" {
+		t.Errorf("azure api_version = %q, want the env value", cfg.LLM.AzureOpenAI.APIVersion)
+	}
+}
+
 // TestRepoOverridesPersonal is the documented-priority test: a repo-level
 // .gitl.yaml must override the personal config file.
 func TestRepoOverridesPersonal(t *testing.T) {
