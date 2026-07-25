@@ -480,54 +480,33 @@ func matchesAnyGlob(p string, globs []string) bool {
 }
 
 // filterDiffByGlobs drops whole per-file sections of a unified diff whose path
-// matches an exclude glob. It splits on "diff --git " headers; anything before
-// the first header (rare) is preserved.
+// matches an exclude glob. Section splitting and path extraction are owned by
+// internal/gitlog (SplitDiffSections / DiffSectionPath): boundaries are
+// line-anchored "diff --git " headers — a content line whose text merely
+// CONTAINS that substring must not split a section, or an excluded file's
+// content could leak into the LLM prompt — and quoted core.quotePath headers
+// (non-ASCII filenames) are decoded so their globs still match. Anything
+// before the first header (rare) is preserved.
 func filterDiffByGlobs(diff string, globs []string) string {
 	if len(globs) == 0 || strings.TrimSpace(diff) == "" {
 		return diff
 	}
-	const sep = "diff --git "
-	// Keep any preamble before the first section.
-	idx := strings.Index(diff, sep)
-	if idx == -1 {
+	preamble, sections := gitlog.SplitDiffSections(diff)
+	if len(sections) == 0 {
 		return diff
 	}
 
 	var b strings.Builder
-	b.WriteString(diff[:idx])
-
-	rest := diff[idx:]
-	sections := strings.Split(rest, sep)
+	b.WriteString(preamble)
 	for _, sec := range sections {
-		if sec == "" {
-			continue
-		}
-		p := parseDiffGitPath(sec)
+		p := gitlog.DiffSectionPath(sec)
 		if p != "" && matchesAnyGlob(p, globs) {
 			slog.Debug("excluding file from diff", "path", p)
 			continue
 		}
-		b.WriteString(sep)
 		b.WriteString(sec)
 	}
 	return b.String()
-}
-
-// parseDiffGitPath extracts the b-side path from a "diff --git a/x b/y" header
-// section (the leading "diff --git " prefix already stripped).
-func parseDiffGitPath(section string) string {
-	nl := strings.IndexByte(section, '\n')
-	header := section
-	if nl != -1 {
-		header = section[:nl]
-	}
-	// header is "a/OLDPATH b/NEWPATH"; both sides can contain spaces.
-	// Find the last " b/" to correctly split the b-side even for paths with spaces.
-	idx := strings.LastIndex(header, " b/")
-	if idx < 0 {
-		return ""
-	}
-	return header[idx+3:]
 }
 
 // truncateDiff caps the diff at maxBytes with an explicit marker (§6). A

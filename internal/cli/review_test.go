@@ -54,6 +54,91 @@ func TestFilterDiffByGlobs(t *testing.T) {
 	}
 }
 
+// TestFilterDiffByGlobsContentContainingHeaderText is the regression test for
+// the empirically-reproduced substring-split bug: a KEPT file whose ADDED
+// content contains the literal text "diff --git " used to split the section
+// mid-way, and an EXCLUDED file's content could survive filtering and reach
+// the LLM prompt. Section boundaries must be line-anchored.
+func TestFilterDiffByGlobsContentContainingHeaderText(t *testing.T) {
+	t.Parallel()
+	diff := "diff --git a/doc.md b/doc.md\n" +
+		"index 111..222 100644\n" +
+		"--- a/doc.md\n+++ b/doc.md\n@@ -1 +1,2 @@\n" +
+		" intro\n" +
+		"+here is an example: diff --git a/x b/y\n" + // content, NOT a boundary
+		"diff --git a/secrets.lock b/secrets.lock\n" +
+		"index 333..444 100644\n" +
+		"--- a/secrets.lock\n+++ b/secrets.lock\n@@ -1 +1 @@\n" +
+		"-old-secret\n+SUPER_SECRET_VALUE\n"
+
+	out := filterDiffByGlobs(diff, []string{"*.lock"})
+
+	// The excluded file's content must be COMPLETELY absent — this is the
+	// security property policy.exclude_globs exists for.
+	for _, leaked := range []string{"secrets.lock", "SUPER_SECRET_VALUE", "old-secret"} {
+		if strings.Contains(out, leaked) {
+			t.Errorf("excluded file content leaked past the glob filter (%q):\n%s", leaked, out)
+		}
+	}
+	// The kept file survives intact, including the tricky content line.
+	if !strings.Contains(out, "here is an example: diff --git a/x b/y") {
+		t.Errorf("kept file content was dropped:\n%s", out)
+	}
+}
+
+// TestFilterDiffByGlobsExcludedFileContentTrailsFakeBoundary is the actual
+// empirically-reproduced leak vector for the substring-split bug (found
+// during independent review of this fix): the EXCLUDED file's own added
+// content contains a mid-line "diff --git a/<kept> b/<kept>" occurrence,
+// followed on subsequent lines by more of the excluded file's real content.
+// Under the old non-line-anchored split, that mid-line occurrence became a
+// false section boundary, and everything after it — including the secret
+// value on the next line — was reattached to a fabricated "kept" section
+// and survived filtering. (The sibling test above, with the marker in a
+// KEPT file's content, does not exercise this path: the old code happened
+// to still resolve the excluded file's real header correctly in that
+// arrangement.)
+func TestFilterDiffByGlobsExcludedFileContentTrailsFakeBoundary(t *testing.T) {
+	t.Parallel()
+	diff := "diff --git a/secrets.lock b/secrets.lock\n" +
+		"index 111..222 100644\n" +
+		"--- a/secrets.lock\n+++ b/secrets.lock\n@@ -1 +2 @@\n" +
+		"+prefix diff --git a/keep.go b/keep.go\n" + // fake boundary inside excluded content
+		"+SUPER_SECRET_VALUE_TRAILS\n" // must not survive attached to the fake header
+
+	out := filterDiffByGlobs(diff, []string{"*.lock"})
+
+	for _, leaked := range []string{"secrets.lock", "SUPER_SECRET_VALUE_TRAILS", "keep.go"} {
+		if strings.Contains(out, leaked) {
+			t.Errorf("excluded file content leaked past the glob filter (%q):\n%s", leaked, out)
+		}
+	}
+}
+
+// TestFilterDiffByGlobsQuotedPath: git quotes non-ASCII filenames in diff
+// headers by default (core.quotepath=true). The quoted header must still be
+// decoded so the exclude glob matches — previously such files silently
+// escaped exclusion.
+func TestFilterDiffByGlobsQuotedPath(t *testing.T) {
+	t.Parallel()
+	// "данные" in UTF-8, octal-escaped per git's core.quotePath output.
+	diff := "diff --git \"a/\\320\\264\\320\\260\\320\\275\\320\\275\\321\\213\\320\\265.lock\" \"b/\\320\\264\\320\\260\\320\\275\\320\\275\\321\\213\\320\\265.lock\"\n" +
+		"index 111..222 100644\n" +
+		"--- \"a/\\320\\264\\320\\260\\320\\275\\320\\275\\321\\213\\320\\265.lock\"\n" +
+		"+++ \"b/\\320\\264\\320\\260\\320\\275\\320\\275\\321\\213\\320\\265.lock\"\n" +
+		"@@ -1 +1 @@\n-x\n+y\n" +
+		"diff --git a/app.go b/app.go\n" +
+		"--- a/app.go\n+++ b/app.go\n@@ -1 +1 @@\n-old\n+new\n"
+
+	out := filterDiffByGlobs(diff, []string{"*.lock"})
+	if strings.Contains(out, ".lock") {
+		t.Errorf("quoted-path .lock file was not excluded:\n%s", out)
+	}
+	if !strings.Contains(out, "app.go") {
+		t.Errorf("kept file was dropped:\n%s", out)
+	}
+}
+
 func TestTruncateDiff(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("x", 100)
@@ -119,7 +204,7 @@ func TestBuildArtifactStats(t *testing.T) {
 		{Hash: "h1", Author: "A", Subject: "s1", Files: []gitlog.FileChange{{Status: "M", Path: "a.go"}}},
 		{Hash: "h2", Author: "B", Subject: "s2", Files: []gitlog.FileChange{{Status: "M", Path: "a.go"}, {Status: "A", Path: "b.go"}}},
 	}
-	diff := "--- a/a.go\n+++ b/a.go\n+added1\n+added2\n-removed1\n"
+	diff := "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1,2 @@\n+added1\n+added2\n-removed1\n"
 	resp := llm.Response{Content: "review", Risk: llm.Risk{Level: "medium", Summary: "sum"}}
 
 	art := buildArtifact(cfg, "r..s", commits, diff, resp)

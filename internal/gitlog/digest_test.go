@@ -14,10 +14,12 @@ func TestAggregateDigestByAuthor(t *testing.T) {
 		{Hash: "h2", Author: "John Roe", Subject: "fix: b", Files: []FileChange{{Path: "b.go"}}},
 		{Hash: "h3", Author: "Jane Doe", Subject: "fix: c", Files: []FileChange{{Path: "a.go"}}},
 	}
+	// Structurally real diffs (header + hunk): DiffLineStats only counts
+	// lines inside a hunk, so bare +/- lines without "@@" would count as 0.
 	diffs := map[string]string{
-		"h1": "+added1\n+added2\n",
-		"h2": "+added\n-removed\n",
-		"h3": "-removed1\n-removed2\n-removed3\n",
+		"h1": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -0,0 +1,2 @@\n+added1\n+added2\n",
+		"h2": "diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -1 +1 @@\n+added\n-removed\n",
+		"h3": "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1,3 +0,0 @@\n-removed1\n-removed2\n-removed3\n",
 	}
 
 	d := AggregateDigest(commits, diffs, since, until)

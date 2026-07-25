@@ -109,16 +109,25 @@ func (r *Runner) Log(ctx context.Context, revRange string) ([]Commit, error) {
 	return ParseLog(out)
 }
 
+// noQuotePath disables git's core.quotePath quoting of non-ASCII filenames in
+// diff headers (`diff --git "a/\320..." "b/\320..."` → plain UTF-8 paths).
+// Quoting is git's DEFAULT, and quoted headers used to defeat exclude-glob
+// matching and DiffPaths extraction. Passed as `-c core.quotepath=false`
+// BEFORE the subcommand on every diff-producing invocation. Defense in depth:
+// DiffSectionPath still decodes quoted headers for diff text that originated
+// elsewhere — this flag just keeps our own output unquoted at the source.
+var noQuotePath = []string{"-c", "core.quotepath=false"}
+
 // Diff runs `git diff` over revRange and returns the raw unified diff text.
 func (r *Runner) Diff(ctx context.Context, revRange string) (string, error) {
-	return r.run(ctx, "diff", "--end-of-options", revRange)
+	return r.run(ctx, append(noQuotePath, "diff", "--end-of-options", revRange)...)
 }
 
 // DiffStaged runs `git diff --cached` and returns the unified diff of staged
 // changes. Nothing staged is not an error — git exits 0 with empty output, so
 // callers branch on the empty string.
 func (r *Runner) DiffStaged(ctx context.Context) (string, error) {
-	return r.run(ctx, "diff", "--cached")
+	return r.run(ctx, append(noQuotePath, "diff", "--cached")...)
 }
 
 // LatestTag runs `git describe --tags --abbrev=0` and returns the most recent
@@ -152,7 +161,7 @@ func (r *Runner) LogSince(ctx context.Context, since time.Time) ([]Commit, error
 // DiffForCommit runs `git show --format= <hash>` and returns the unified diff
 // introduced by that single commit (no commit message, just the diff body).
 func (r *Runner) DiffForCommit(ctx context.Context, hash string) (string, error) {
-	return r.run(ctx, "show", "--format=", "--end-of-options", hash)
+	return r.run(ctx, append(noQuotePath, "show", "--format=", "--end-of-options", hash)...)
 }
 
 // ObjectExists runs `git cat-file -e <sha>^{commit}` and reports whether the
@@ -210,14 +219,29 @@ func (r *Runner) run(ctx context.Context, args ...string) (string, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
+		name := gitSubcommand(args)
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", fmt.Errorf("git %s: %w", args[0], ctxErr)
+			return "", fmt.Errorf("git %s: %w", name, ctxErr)
 		}
 		msg := strings.TrimSpace(stderr.String())
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("git %s failed: %s", args[0], msg)
+		return "", fmt.Errorf("git %s failed: %s", name, msg)
 	}
 	return stdout.String(), nil
+}
+
+// gitSubcommand returns the subcommand name for error messages, skipping any
+// leading "-c <key>=<val>" option pairs (e.g. the noQuotePath prefix) so
+// errors say `git diff failed`, not `git -c failed`.
+func gitSubcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] == "-c" {
+			i++ // skip the "-c" value too
+			continue
+		}
+		return args[i]
+	}
+	return "git"
 }
