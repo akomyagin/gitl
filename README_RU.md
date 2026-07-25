@@ -207,20 +207,35 @@ cache:
 Кэш хранится в `~/.cache/gitl/review/` (XDG-совместимо). Пропустить для одного вызова:
 `gitl review HEAD~5..HEAD --no-cache`
 
-### Кастомные шаблоны (`prompt.system_template_file` / `output.template_file`)
+### Кастомные шаблоны (`prompt.*_template_file` / `output.template_file`)
 
-Два независимых override'а, оба только через конфиг (CLI-флага для них нет):
+Независимые override'ы, все только через конфиг (CLI-флага для них нет):
 
 - **`prompt.system_template_file`** — собственный **системный промпт ревью**
-  (чеклист безопасности, архитектурные ограничения, правила команды):
+  (чеклист безопасности, архитектурные ограничения, правила команды).
+  Используется только командой `gitl review`:
 
   ```yaml
   prompt:
     system_template_file: "./review-policy.md"   # путь относительно CWD
   ```
 
-  Шаблон системного промпта получает `{{ .Commits }}`, `{{ .Diff }}`,
+  Шаблон системного промпта ревью получает `{{ .Commits }}`, `{{ .Diff }}`,
   `{{ .Range }}`, `{{ .Staged }}` (см. `internal/prompt/templates.go`).
+
+- **`prompt.changelog_system_template_file`** — собственный **системный промпт
+  changelog'а**, используется только командой `gitl changelog --ai`:
+
+  ```yaml
+  prompt:
+    changelog_system_template_file: "./changelog-policy.md"   # путь относительно CWD
+  ```
+
+  Шаблон системного промпта changelog'а получает `{{ .Commits }}`,
+  `{{ .Range }}`, `{{ .Grouped }}` — но **не** `{{ .Diff }}`: `changelog --ai`
+  работает по метаданным коммитов, диффа там нет, и review-шаблон с `.Diff`
+  здесь бы падал. Именно поэтому ключи раздельные: каждая команда читает
+  только свой ключ, любой из них можно задать независимо от другого.
 
 - **`output.template_file`** — собственный **шаблон рендера `md`-формата** для
   готового артефакта ревью:
@@ -233,7 +248,7 @@ cache:
   Шаблон вывода получает render-функции из `internal/render/render.go`
   (`render.TemplateFuncs()`).
 
-> **Про доверие:** `prompt.system_template_file`/`output.template_file` можно
+> **Про доверие:** ключи `prompt.*_template_file`/`output.template_file` можно
 > задать через repo-level `.gitl.yaml`, а не только в личном конфиге — значит
 > `gitl review` на склонированном чужом/недоверенном репозитории может
 > указать на шаблон *внутри этого же репозитория*. Это осознанный механизм
