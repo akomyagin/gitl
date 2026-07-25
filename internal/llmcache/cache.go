@@ -1,8 +1,9 @@
 // Package llmcache is a content-addressed, on-disk cache for LLM review
-// responses. Keys hash provider+model+prompt so a model or prompt change never
-// produces a false hit; entries expire by TTL and the store is safe for
-// concurrent writers (temp file + atomic rename). It depends only on the
-// standard library.
+// responses. Keys hash every request parameter that can change the response
+// (provider, model, endpoint, Azure coordinates, sampling parameters, prompts —
+// see KeyParams) so no parameter change ever produces a false hit; entries
+// expire by TTL and the store is safe for concurrent writers (temp file +
+// atomic rename). It depends only on the standard library.
 package llmcache
 
 import (
@@ -13,6 +14,8 @@ import (
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/akomyagin/gitl/internal/llm"
@@ -54,10 +57,46 @@ func NewInDir(dir string, ttl time.Duration) *Cache {
 	return &Cache{dir: dir, ttl: ttl}
 }
 
-// Key hashes provider, model, system and user prompts into a hex SHA-256 key.
-func Key(provider, model, system, user string) string {
-	canonical := system + "\n\x00\n" + user
-	sum := sha256.Sum256([]byte(provider + ":" + model + ":" + canonical))
+// KeyParams enumerates every request parameter that must contribute to the
+// cache key: two requests differing in ANY of these fields must never collide
+// on the same key (a base_url or deployment change targets a different
+// backend; temperature/max_tokens change the response itself). BaseURL is the
+// RESOLVED endpoint (config.Load fills provider defaults in before call sites
+// build a key).
+type KeyParams struct {
+	Provider        string
+	Model           string
+	BaseURL         string
+	AzureEndpoint   string
+	AzureDeployment string
+	AzureAPIVersion string
+	System          string
+	User            string
+	Temperature     float64
+	MaxTokens       int
+}
+
+// Key hashes all request parameters into a hex SHA-256 key. Fields are joined
+// with a NUL separator, which is not a valid byte in any provider/model/
+// endpoint/version identifier — those fields can never be confused by
+// concatenation. System/User embed diff text (git diff runs without
+// --text), so a NUL is not strictly impossible there; the worst case is a
+// spurious cache hit/miss within the user's own repo, not a cross-boundary
+// collision.
+func Key(p KeyParams) string {
+	fields := []string{
+		p.Provider,
+		p.Model,
+		p.BaseURL,
+		p.AzureEndpoint,
+		p.AzureDeployment,
+		p.AzureAPIVersion,
+		strconv.FormatFloat(p.Temperature, 'g', -1, 64),
+		strconv.Itoa(p.MaxTokens),
+		p.System,
+		p.User,
+	}
+	sum := sha256.Sum256([]byte(strings.Join(fields, "\x00")))
 	return hex.EncodeToString(sum[:])
 }
 

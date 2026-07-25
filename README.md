@@ -500,7 +500,10 @@ interactively inside an agent session (Claude Desktop, Cursor, Windsurf, etc.) i
 shelling out. It exposes two tools:
 
 - **`gitl_review`** — same review engine as `gitl review`: `range`/`pr`/`staged` (exactly
-  one), optional per-call `provider`/`model`/`base_url` overrides. Always returns the
+  one), optional per-call `model` override. Provider and endpoint are fixed at server
+  startup by design: the tool caller is an AI agent, which can be steered by prompt
+  injection inside the reviewed content — a per-call `base_url` would let a malicious
+  commit redirect the request and leak the real API key. Always returns the
   structured JSON artifact (no md/text rendering, no streaming — a tool result is atomic).
   `risk.level` is returned as data; there is no `--fail-on` in MCP mode since there is no
   process exit code to gate.
