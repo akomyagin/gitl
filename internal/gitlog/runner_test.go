@@ -475,3 +475,57 @@ func TestRunnerDiffStaged(t *testing.T) {
 		t.Errorf("DiffStaged does not mention the staged file:\n%s", diff)
 	}
 }
+
+// TestRunnerDiffNonASCIIPathUnquoted: the Runner passes -c core.quotepath=false
+// to every diff-producing invocation, so git emits non-ASCII filenames as
+// plain UTF-8 in the "diff --git" header instead of the quoted/octal-escaped
+// form (git's default). Downstream glob matching and path extraction then see
+// the real path directly. (DiffSectionPath still decodes quoted headers for
+// diff text produced elsewhere — this is defense in depth, not a replacement.)
+func TestRunnerDiffNonASCIIPathUnquoted(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed; skipping integration test")
+	}
+	dir := t.TempDir()
+	runTestGit(t, dir, "init", "-q", "-b", "main")
+
+	const name = "данные.lock"
+	writeTestFile(t, dir, name, "v1\n")
+	runTestGit(t, dir, "add", ".")
+	runTestGit(t, dir, "commit", "-q", "-m", "feat: add non-ascii file")
+	writeTestFile(t, dir, name, "v2\n")
+	runTestGit(t, dir, "add", ".")
+	runTestGit(t, dir, "commit", "-q", "-m", "chore: modify non-ascii file")
+
+	runner, err := NewRunner(dir)
+	if err != nil {
+		t.Fatalf("NewRunner: %v", err)
+	}
+	ctx := context.Background()
+
+	diff, err := runner.Diff(ctx, "HEAD~1..HEAD")
+	if err != nil {
+		t.Fatalf("Diff: %v", err)
+	}
+	wantHeader := "diff --git a/" + name + " b/" + name
+	if !strings.Contains(diff, wantHeader) {
+		t.Errorf("Diff header not unquoted UTF-8; want %q in:\n%s", wantHeader, diff)
+	}
+	if strings.Contains(diff, `\320`) {
+		t.Errorf("Diff still contains octal-escaped (quoted) path bytes:\n%s", diff)
+	}
+	if got := DiffPaths(diff); len(got) != 1 || got[0] != name {
+		t.Errorf("DiffPaths(diff) = %v, want [%s]", got, name)
+	}
+
+	// Same guarantee for the staged path.
+	writeTestFile(t, dir, name, "v3\n")
+	runTestGit(t, dir, "add", ".")
+	staged, err := runner.DiffStaged(ctx)
+	if err != nil {
+		t.Fatalf("DiffStaged: %v", err)
+	}
+	if !strings.Contains(staged, wantHeader) {
+		t.Errorf("DiffStaged header not unquoted UTF-8; want %q in:\n%s", wantHeader, staged)
+	}
+}

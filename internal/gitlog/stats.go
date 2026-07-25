@@ -2,20 +2,40 @@ package gitlog
 
 import "strings"
 
-// DiffLineStats counts added/removed content lines in a unified diff, ignoring
-// the +++/--- file headers. Shared by the risk heuristic, the offline
-// provider, and the review command's stats block — extracted here (rather
-// than duplicated per caller) since it operates purely on diff text owned by
-// this package.
+// DiffLineStats counts added/removed content lines in a unified diff. Shared
+// by the risk heuristic, the offline provider, and the review command's stats
+// block — extracted here (rather than duplicated per caller) since it operates
+// purely on diff text owned by this package.
+//
+// It is a small state machine driven by the diff's structural markers instead
+// of per-line prefix guessing: only lines inside a hunk (after an "@@" hunk
+// header, until the next "diff --git " section boundary) are counted. That
+// makes the "+++ b/path"/"--- a/path" FILE headers naturally uncounted (they
+// precede the first "@@" of each section), while genuine content lines that
+// happen to START with literal "+++" or "---" (e.g. an added `+++i;` C line,
+// or a removed YAML `---` separator) are correctly counted as content — the
+// previous prefix-only check misclassified those as headers and dropped them.
 func DiffLineStats(diff string) (added, removed int) {
+	inHunk := false
 	for _, line := range strings.Split(diff, "\n") {
 		switch {
-		case strings.HasPrefix(line, "+++"), strings.HasPrefix(line, "---"):
-			// file headers, not content changes
+		case strings.HasPrefix(line, diffHeaderPrefix):
+			// New per-file section: back to header territory. Each element of
+			// the split IS a whole line, so this prefix check is line-anchored
+			// by construction (a content line merely CONTAINING the header
+			// text mid-line starts with '+'/'-'/' ' and never matches).
+			inHunk = false
+		case strings.HasPrefix(line, "@@"):
+			inHunk = true
+		case !inHunk:
+			// File headers (+++/---), index/mode/rename metadata before the
+			// first hunk — never content.
 		case strings.HasPrefix(line, "+"):
 			added++
 		case strings.HasPrefix(line, "-"):
 			removed++
+			// Lines starting with ' ' (context) or '\' ("\ No newline at end
+			// of file") fall through uncounted.
 		}
 	}
 	return added, removed
@@ -33,39 +53,25 @@ func ChangedFileCount(commits []Commit) int {
 }
 
 // DiffFileCount counts the number of distinct files in a unified diff by
-// counting "diff --git " headers. Used by HeuristicRisk so it scores the
-// already glob-filtered diff, not the unfiltered commit file list.
+// counting its genuine (line-anchored) "diff --git " section headers. Used by
+// HeuristicRisk so it scores the already glob-filtered diff, not the
+// unfiltered commit file list.
 func DiffFileCount(diff string) int {
-	n := strings.Count(diff, "\ndiff --git ")
-	if strings.HasPrefix(diff, "diff --git ") {
-		n++
-	}
-	return n
+	_, sections := SplitDiffSections(diff)
+	return len(sections)
 }
 
 // DiffPaths extracts the changed (b-side) file paths from a unified diff by
-// parsing "diff --git a/x b/y" headers. Used as the sensitive-path signal
-// when no commit metadata exists (e.g. a staged review, where there is no
-// commit history to scan file paths from).
+// parsing "diff --git a/x b/y" headers (quoted core.quotePath headers
+// included — see DiffSectionPath). Used as the sensitive-path signal when no
+// commit metadata exists (e.g. a staged review, where there is no commit
+// history to scan file paths from).
 func DiffPaths(diff string) []string {
-	const sep = "diff --git "
-	idx := strings.Index(diff, sep)
-	if idx == -1 {
-		return nil
-	}
+	_, sections := SplitDiffSections(diff)
 	var paths []string
-	for _, sec := range strings.Split(diff[idx:], sep) {
-		if sec == "" {
-			continue
-		}
-		header := sec
-		if nl := strings.IndexByte(sec, '\n'); nl != -1 {
-			header = sec[:nl]
-		}
-		// header is "a/OLDPATH b/NEWPATH"; find the last " b/" to correctly
-		// split the b-side even for paths containing spaces.
-		if i := strings.LastIndex(header, " b/"); i >= 0 {
-			paths = append(paths, header[i+3:])
+	for _, sec := range sections {
+		if p := DiffSectionPath(sec); p != "" {
+			paths = append(paths, p)
 		}
 	}
 	return paths

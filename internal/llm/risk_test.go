@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,8 +20,13 @@ func manyFiles(n int) []gitlog.FileChange {
 	return fs
 }
 
+// bigDiff builds a structurally real single-file unified diff (header +
+// hunk) with n added lines. DiffLineStats only counts lines inside a hunk
+// (after "@@"), so bare "+..." lines without a header would count as zero.
 func bigDiff(lines int) string {
 	var b strings.Builder
+	b.WriteString("diff --git a/big.go b/big.go\n--- a/big.go\n+++ b/big.go\n")
+	fmt.Fprintf(&b, "@@ -0,0 +1,%d @@\n", lines)
 	for i := 0; i < lines; i++ {
 		b.WriteString("+added line\n")
 	}
@@ -49,7 +55,7 @@ func TestHeuristicRisk(t *testing.T) {
 		{
 			name:    "low: tiny contained change",
 			commits: commitsWith(gitlog.FileChange{Status: "M", Path: "README.md"}),
-			diff:    "--- a/README.md\n+++ b/README.md\n+one line\n",
+			diff:    "diff --git a/README.md b/README.md\n--- a/README.md\n+++ b/README.md\n@@ -1 +1,2 @@\n line\n+one line\n",
 			want:    RiskLow,
 		},
 		{
