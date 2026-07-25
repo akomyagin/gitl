@@ -192,6 +192,104 @@ func TestDigestGoldenMultiRepoWithErrorJSON(t *testing.T) {
 	assertGolden(t, "testdata/digest/multi_repo_with_error.json", []byte(b.String()))
 }
 
+// riskTrendDigestArtifact is the single-repo fixture with a populated
+// RiskTrend (the trend section/JSON field present).
+func riskTrendDigestArtifact() DigestArtifact {
+	art := singleRepoDigestArtifact()
+	art.Repos[0].RiskTrend = &DigestRiskTrend{
+		Total:        6,
+		Low:          3,
+		Medium:       2,
+		High:         1,
+		RecentHigh:   1,
+		PreviousHigh: 0,
+		Recent: []DigestRiskEntry{
+			{When: time.Date(2026, 7, 5, 18, 30, 0, 0, time.UTC), Range: "HEAD~5..HEAD", Level: "high"},
+			{When: time.Date(2026, 7, 4, 11, 0, 0, 0, time.UTC), Range: "pr/42", Level: "medium"},
+			{When: time.Date(2026, 7, 2, 9, 15, 0, 0, time.UTC), Range: "staged", Level: "low"},
+		},
+	}
+	return art
+}
+
+func TestDigestGoldenRiskTrendMarkdown(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	if err := RenderDigest(&b, riskTrendDigestArtifact(), FormatMarkdown); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	assertGolden(t, "testdata/digest/risk_trend.md", []byte(b.String()))
+}
+
+func TestDigestGoldenRiskTrendText(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	if err := RenderDigest(&b, riskTrendDigestArtifact(), FormatText); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	assertGolden(t, "testdata/digest/risk_trend.txt", []byte(b.String()))
+}
+
+func TestDigestGoldenRiskTrendJSON(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	if err := RenderDigest(&b, riskTrendDigestArtifact(), FormatJSON); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	assertGolden(t, "testdata/digest/risk_trend.json", []byte(b.String()))
+}
+
+// TestDigestRiskTrendJSONShape: risk_trend is absent when RiskTrend is nil
+// (purely additive change — schema_version stays 1) and carries the full
+// shape when set.
+func TestDigestRiskTrendJSONShape(t *testing.T) {
+	t.Parallel()
+
+	// nil trend → the key must be completely absent, schema unchanged.
+	var without strings.Builder
+	if err := RenderDigest(&without, singleRepoDigestArtifact(), FormatJSON); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	if strings.Contains(without.String(), "risk_trend") {
+		t.Errorf("risk_trend must be omitted for a nil trend:\n%s", without.String())
+	}
+	if !strings.Contains(without.String(), `"schema_version": 1`) {
+		t.Errorf("schema_version must stay 1:\n%s", without.String())
+	}
+
+	// populated trend → present with the right shape, schema STILL 1.
+	var with strings.Builder
+	if err := RenderDigest(&with, riskTrendDigestArtifact(), FormatJSON); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	out := with.String()
+	if !strings.Contains(out, `"schema_version": 1`) {
+		t.Errorf("schema_version must stay 1 with a trend attached:\n%s", out)
+	}
+	for _, want := range []string{
+		`"risk_trend"`, `"total": 6`, `"low": 3`, `"medium": 2`, `"high": 1`,
+		`"recent_high": 1`, `"previous_high": 0`,
+		`"when": "2026-07-05T18:30:00Z"`, `"range": "pr/42"`, `"level": "high"`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("json output missing %s:\n%s", want, out)
+		}
+	}
+}
+
+// TestDigestMarkdownOmitsRiskTrendWhenNil: no history → no section at all, not
+// even a "no history" placeholder.
+func TestDigestMarkdownOmitsRiskTrendWhenNil(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	if err := RenderDigest(&b, singleRepoDigestArtifact(), FormatMarkdown); err != nil {
+		t.Fatalf("RenderDigest: %v", err)
+	}
+	if strings.Contains(b.String(), "Risk trend") {
+		t.Errorf("nil RiskTrend must omit the section entirely:\n%s", b.String())
+	}
+}
+
 func TestDigestJSONNullFieldsOnError(t *testing.T) {
 	t.Parallel()
 	var b strings.Builder

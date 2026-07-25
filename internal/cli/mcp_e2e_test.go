@@ -114,11 +114,23 @@ func moduleRoot() (string, error) {
 	}
 }
 
-// TestMain exists only to remove the shared e2e binary after the package's
-// tests finish (a lazily built, test-scoped artifact has no other cleanup
-// hook). It must not do anything else.
+// TestMain removes the shared e2e binary after the package's tests finish (a
+// lazily built, test-scoped artifact has no other cleanup hook), and isolates
+// the whole test binary from the real user data dir: runReview appends to
+// internal/riskhistory's log, which resolves $XDG_DATA_HOME/gitl by default,
+// so any test in this package that exercises review without its own
+// t.Setenv("XDG_DATA_HOME", ...) would otherwise leak records into the
+// developer's real ~/.local/share/gitl/risk-history.jsonl. Individual tests
+// may still override this with their own t.Setenv for a per-test temp dir.
 func TestMain(m *testing.M) {
+	dataDir, err := os.MkdirTemp("", "gitl-test-xdg-data-")
+	if err == nil {
+		os.Setenv("XDG_DATA_HOME", dataDir)
+	}
 	code := m.Run()
+	if err == nil {
+		os.RemoveAll(dataDir)
+	}
 	if gitlBinDir != "" {
 		os.RemoveAll(gitlBinDir)
 	}

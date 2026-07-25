@@ -43,7 +43,7 @@ func TestBuildDigestArtifactUntilIsDeterministic(t *testing.T) {
 	}
 
 	for name, results := range orderings {
-		art := buildDigestArtifact(generatedAt, 7, since, results)
+		art := buildDigestArtifact(generatedAt, 7, since, results, nil)
 		if !art.Until.Equal(generatedAt) {
 			t.Errorf("%s: Until = %v, want generatedAt %v", name, art.Until, generatedAt)
 		}

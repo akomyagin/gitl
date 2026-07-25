@@ -2,6 +2,8 @@ package cli
 
 import (
 	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -9,6 +11,7 @@ import (
 	"github.com/akomyagin/gitl/internal/gitlog"
 	"github.com/akomyagin/gitl/internal/llm"
 	"github.com/akomyagin/gitl/internal/render"
+	"github.com/akomyagin/gitl/internal/riskhistory"
 )
 
 func TestMatchesAnyGlob(t *testing.T) {
@@ -350,6 +353,126 @@ func TestFailErrorMessage(t *testing.T) {
 	e := &failError{level: "high", threshold: "medium"}
 	if !strings.Contains(e.Error(), "high") || !strings.Contains(e.Error(), "medium") {
 		t.Errorf("failError message unhelpful: %q", e.Error())
+	}
+}
+
+// riskHistoryTestDir points the riskhistory data-dir resolver at a temp dir
+// via XDG_DATA_HOME (honored on every OS — checked before the platform
+// branches), so BOTH the review writer and the digest reader resolve to the
+// same hermetic location without any code seam. Returns the temp dir.
+func riskHistoryTestDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("XDG_DATA_HOME", dir)
+	return dir
+}
+
+// TestReviewWritesRiskHistory: a successful offline review appends exactly one
+// risk-history record with the review's level/range and the offline/heuristic
+// markers.
+func TestReviewWritesRiskHistory(t *testing.T) {
+	dataDir := riskHistoryTestDir(t)
+	dir := setupRepo(t, false)
+
+	if _, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "HEAD~1..HEAD"); err != nil {
+		t.Fatalf("review: %v", err)
+	}
+
+	records, err := riskhistory.NewInDir(filepath.Join(dataDir, "gitl")).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("got %d records, want exactly 1", len(records))
+	}
+	rec := records[0]
+	if rec.SchemaVersion != riskhistory.RecordSchemaVersion {
+		t.Errorf("SchemaVersion = %d, want %d", rec.SchemaVersion, riskhistory.RecordSchemaVersion)
+	}
+	if rec.Range != "HEAD~1..HEAD" {
+		t.Errorf("Range = %q, want HEAD~1..HEAD", rec.Range)
+	}
+	switch rec.RiskLevel {
+	case "low", "medium", "high":
+	default:
+		t.Errorf("RiskLevel = %q, want low|medium|high", rec.RiskLevel)
+	}
+	if !rec.Offline || !rec.Heuristic {
+		t.Errorf("Offline/Heuristic = %v/%v, want true/true for the offline heuristic path", rec.Offline, rec.Heuristic)
+	}
+	if rec.Repo == "" {
+		t.Errorf("Repo key must be non-empty inside a git worktree (worktree-root fallback)")
+	}
+	if rec.Timestamp.IsZero() {
+		t.Errorf("Timestamp must be set")
+	}
+}
+
+// TestReviewDryRunWritesNoRiskHistory: --dry-run returns before any provider
+// call — no risk outcome exists, so nothing may be logged.
+func TestReviewDryRunWritesNoRiskHistory(t *testing.T) {
+	dataDir := riskHistoryTestDir(t)
+	dir := setupRepo(t, false)
+
+	if _, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "HEAD~1..HEAD", "--dry-run"); err != nil {
+		t.Fatalf("dry-run: %v", err)
+	}
+
+	records, err := riskhistory.NewInDir(filepath.Join(dataDir, "gitl")).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(records) != 0 {
+		t.Errorf("dry-run must log nothing, got %d records: %+v", len(records), records)
+	}
+}
+
+// TestReviewRiskLogDisabledWritesNothing: policy.risk_log_enabled: false (the
+// single config-only opt-out) suppresses the write entirely.
+func TestReviewRiskLogDisabledWritesNothing(t *testing.T) {
+	dataDir := riskHistoryTestDir(t)
+	dir := setupRepo(t, false)
+	// Repo-level .gitl.yaml in the cwd is auto-loaded by loadConfig.
+	if err := os.WriteFile(filepath.Join(dir, ".gitl.yaml"), []byte("policy:\n  risk_log_enabled: false\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "HEAD~1..HEAD"); err != nil {
+		t.Fatalf("review: %v", err)
+	}
+
+	records, err := riskhistory.NewInDir(filepath.Join(dataDir, "gitl")).Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(records) != 0 {
+		t.Errorf("risk_log_enabled: false must log nothing, got %d records", len(records))
+	}
+}
+
+// TestReviewThenDigestShowsRiskTrend is the end-to-end pass: an offline
+// `review` writes the history record, and a `digest --format=json` over the
+// SAME repo and the same XDG_DATA_HOME reads it back as a risk_trend section.
+func TestReviewThenDigestShowsRiskTrend(t *testing.T) {
+	riskHistoryTestDir(t)
+	dir := setupRepo(t, false)
+
+	if _, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "HEAD~1..HEAD"); err != nil {
+		t.Fatalf("review: %v", err)
+	}
+
+	out, _, err := runDigestInDir(t, dir, "--format=json")
+	if err != nil {
+		t.Fatalf("digest: %v", err)
+	}
+	if !strings.Contains(out, `"risk_trend"`) {
+		t.Fatalf("digest JSON missing risk_trend after a review:\n%s", out)
+	}
+	if !strings.Contains(out, `"total": 1`) {
+		t.Errorf("risk_trend should count the single review:\n%s", out)
+	}
+	if !strings.Contains(out, `"range": "HEAD~1..HEAD"`) {
+		t.Errorf("risk_trend recent list should carry the review's range:\n%s", out)
 	}
 }
 
