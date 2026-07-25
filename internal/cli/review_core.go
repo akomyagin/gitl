@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"time"
 
@@ -53,7 +54,7 @@ type reviewPlan struct {
 	diff     string // diff after exclude_globs filtering and truncation
 	system   string
 	user     string
-	cache    *llmcache.Cache // nil when the cache is disabled or unavailable
+	cache    llmcache.Cache // nil when the cache is disabled by config/flags
 	cacheKey string
 }
 
@@ -108,14 +109,25 @@ func prepareReview(cfg *config.Config, src diffSource, opts ReviewOptions) (*rev
 	// index hits the cache, any `git add` changes the diff and therefore the key.
 	useCache := cfg.Cache.Enabled && !opts.NoCache && !cfg.OfflineMode() && cfg.Cache.TTLHours > 0
 	if useCache {
-		if c, cerr := llmcache.New(time.Duration(cfg.Cache.TTLHours) * time.Hour); cerr == nil {
-			plan.cache = c
-			plan.cacheKey = llmCacheKey(cfg, system, user)
-		} else {
-			slog.Debug("llm cache unavailable", "err", cerr)
-		}
+		plan.cache = llmcache.Open(llmcache.Options{
+			TTL:           time.Duration(cfg.Cache.TTLHours) * time.Hour,
+			RemoteURL:     cfg.Cache.Remote.URL,
+			RemoteToken:   remoteCacheToken(cfg),
+			RemoteTimeout: time.Duration(cfg.Cache.Remote.TimeoutMS) * time.Millisecond,
+		})
+		plan.cacheKey = llmCacheKey(cfg, system, user)
 	}
 	return plan, nil
+}
+
+// remoteCacheToken resolves the optional remote-cache bearer token from the
+// env var NAMED by cache.remote.token_env — the token itself never lives in a
+// config file (same discipline as GITL_API_KEY). Never log this value.
+func remoteCacheToken(cfg *config.Config) string {
+	if cfg.Cache.Remote.TokenEnv == "" {
+		return ""
+	}
+	return os.Getenv(cfg.Cache.Remote.TokenEnv)
 }
 
 // llmCacheKey builds the LLM response cache key from every cfg.LLM parameter

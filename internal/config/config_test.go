@@ -40,6 +40,45 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.OfflineMode() {
 		t.Error("expected offline mode with empty api_key")
 	}
+	// Remote cache tier is strictly opt-in: off by default.
+	if cfg.Cache.Remote.URL != "" {
+		t.Errorf("default cache.remote.url = %q, want empty (remote tier off)", cfg.Cache.Remote.URL)
+	}
+	if cfg.Cache.Remote.TokenEnv != "" {
+		t.Errorf("default cache.remote.token_env = %q, want empty", cfg.Cache.Remote.TokenEnv)
+	}
+	if cfg.Cache.Remote.TimeoutMS != 3000 {
+		t.Errorf("default cache.remote.timeout_ms = %d, want 3000", cfg.Cache.Remote.TimeoutMS)
+	}
+}
+
+// TestEnvCacheRemoteKeys proves the cache.remote.* keys are reachable via env.
+// Same viper quirk as TestEnvAzureOpenAIKeys: AutomaticEnv only consults env
+// vars for keys registered in defaults(), so without the empty cache.remote.*
+// defaults these env vars would be silently ignored.
+func TestEnvCacheRemoteKeys(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Setenv("GITL_CACHE_REMOTE_URL", "https://cache.example.com/gitl")
+	t.Setenv("GITL_CACHE_REMOTE_TOKEN_ENV", "GITL_REMOTE_CACHE_TOKEN")
+	t.Setenv("GITL_CACHE_REMOTE_TIMEOUT_MS", "1500")
+
+	cfg, err := Load(Options{
+		RepoDir:      dir,
+		PersonalPath: filepath.Join(dir, "does-not-exist.yaml"),
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Cache.Remote.URL != "https://cache.example.com/gitl" {
+		t.Errorf("cache.remote.url = %q, want the env value", cfg.Cache.Remote.URL)
+	}
+	if cfg.Cache.Remote.TokenEnv != "GITL_REMOTE_CACHE_TOKEN" {
+		t.Errorf("cache.remote.token_env = %q, want the env value", cfg.Cache.Remote.TokenEnv)
+	}
+	if cfg.Cache.Remote.TimeoutMS != 1500 {
+		t.Errorf("cache.remote.timeout_ms = %d, want 1500 from env", cfg.Cache.Remote.TimeoutMS)
+	}
 }
 
 // TestApplyProviderBaseURL: an empty llm.base_url must resolve to the
