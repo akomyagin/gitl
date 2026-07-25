@@ -1,5 +1,5 @@
 name: "gitl review"
-description: "AI review of git commits with risk scoring (low|medium|high). Sticky PR comment, CI gating. BYOK: OpenAI, Ollama, Azure."
+description: "AI review of git commits with risk scoring (low|medium|high). Sticky PR comment, CI gating. BYOK: OpenAI-compatible, Ollama, Azure, Anthropic, Gemini."
 branding:
   icon: "git-commit"
   color: "purple"
@@ -59,6 +59,28 @@ inputs:
     description: >-
       Pull request number to comment on. If left empty, falls back to the
       triggering pull_request event's number at run time.
+    required: false
+    default: ""
+  provider:
+    description: >-
+      LLM provider to use (openai|ollama|azure_openai|anthropic|gemini).
+      Empty (default) falls through to the repo/personal config or gitl's
+      built-in default (openai-compatible). Passed to gitl as
+      GITL_LLM_PROVIDER.
+    required: false
+    default: ""
+  model:
+    description: >-
+      Model name for the selected provider (e.g. gpt-4o-mini,
+      claude-sonnet-4-6, gemini-2.5-flash). Empty (default) falls
+      through to config / gitl's built-in default. Passed as GITL_LLM_MODEL.
+    required: false
+    default: ""
+  base-url:
+    description: >-
+      Override the provider API endpoint (self-hosted/enterprise gateways).
+      Empty (default) uses the provider's native default endpoint. Passed as
+      GITL_LLM_BASE_URL.
     required: false
     default: ""
 
@@ -169,6 +191,9 @@ runs:
         GITL_FAIL_ON: ${{ inputs.fail-on }}
         GITL_MAX_COST_USD: ${{ inputs.max-cost-usd }}
         GITL_PR_NUMBER: ${{ inputs.pr-number || github.event.pull_request.number }}
+        GITL_LLM_PROVIDER: ${{ inputs.provider }}
+        GITL_LLM_MODEL: ${{ inputs.model }}
+        GITL_LLM_BASE_URL: ${{ inputs.base-url }}
         # Path of THIS action's checkout (not the workspace being reviewed) —
         # needed to locate ci/comment.sh when the action is consumed as
         # `uses: akomyagin/gitl@vX`. Passed via env, not interpolated into

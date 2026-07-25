@@ -48,6 +48,34 @@ func TestActionYAMLDoesNotEchoSecrets(t *testing.T) {
 	}
 }
 
+// TestActionYAMLProviderInputsWiring statically asserts that the optional
+// provider/model/base-url inputs exist in action.yml and are passed through to
+// gitl as GITL_LLM_* env vars (viper's SetEnvPrefix("GITL") + AutomaticEnv
+// mapping in internal/config/config.go). Env-only passthrough is deliberate:
+// an empty env var behaves as unset (config precedence preserved), whereas an
+// empty CLI flag would clobber a configured value.
+func TestActionYAMLProviderInputsWiring(t *testing.T) {
+	root := repoRoot(t)
+	data, err := os.ReadFile(filepath.Join(root, "action.yml"))
+	if err != nil {
+		t.Fatalf("read action.yml: %v", err)
+	}
+	content := string(data)
+
+	for _, want := range []string{
+		"provider:",
+		"model:",
+		"base-url:",
+		"GITL_LLM_PROVIDER: ${{ inputs.provider }}",
+		"GITL_LLM_MODEL: ${{ inputs.model }}",
+		"GITL_LLM_BASE_URL: ${{ inputs.base-url }}",
+	} {
+		if !strings.Contains(content, want) {
+			t.Errorf("action.yml is missing %q (provider/model/base-url input wiring)", want)
+		}
+	}
+}
+
 // repoRoot walks up from this test file's directory to find go.mod, so the
 // test works regardless of the working directory `go test` is invoked from.
 func repoRoot(t *testing.T) string {
