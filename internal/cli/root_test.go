@@ -154,3 +154,80 @@ func TestReviewBadRangeFails(t *testing.T) {
 		t.Errorf("error should mention the bad ref, got: %v", err)
 	}
 }
+
+// TestLoadConfigDiscoversRepoRootFromSubdir is the end-to-end Batch-4
+// regression test: a committed root-level .gitl.yaml must apply when gitl
+// runs from an ordinary subdirectory of the repo (git itself works from
+// there, so users legitimately do this), while a subdirectory .gitl.yaml
+// still overrides it key-by-key.
+func TestLoadConfigDiscoversRepoRootFromSubdir(t *testing.T) {
+	dir := setupCLIRepo(t)
+
+	if err := os.WriteFile(filepath.Join(dir, ".gitl.yaml"),
+		[]byte("policy:\n  fail_on: high\nllm:\n  model: root-model\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sub := filepath.Join(dir, "src", "internal")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sub, ".gitl.yaml"),
+		[]byte("llm:\n  model: sub-model\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(sub); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetContext(context.Background())
+	gf := &globalFlags{configPath: filepath.Join(dir, "no-such-personal-config.yaml")}
+	cfg, err := loadConfig(cmd, gf)
+	if err != nil {
+		t.Fatalf("loadConfig: %v", err)
+	}
+	if cfg.Policy.FailOn != "high" {
+		t.Errorf("policy.fail_on = %q, want high (root .gitl.yaml must be discovered from a subdirectory)", cfg.Policy.FailOn)
+	}
+	if cfg.LLM.Model != "sub-model" {
+		t.Errorf("llm.model = %q, want sub-model (subdirectory config wins on conflict)", cfg.LLM.Model)
+	}
+}
+
+// TestLoadConfigOutsideGitRepo: from a directory that is not inside ANY git
+// repository, root discovery must fail silently and config loading fall back
+// to exactly the old cwd-only behavior — never an error.
+func TestLoadConfigOutsideGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".gitl.yaml"),
+		[]byte("policy:\n  fail_on: medium\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(cwd); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	})
+
+	if got := discoverRepoRoot(context.Background()); got != "" {
+		t.Errorf("discoverRepoRoot outside a repo = %q, want \"\"", got)
+	}
+
+	cmd := newRootCmd()
+	cmd.SetContext(context.Background())
+	gf := &globalFlags{configPath: filepath.Join(dir, "no-such-personal-config.yaml")}
+	cfg, err := loadConfig(cmd, gf)
+	if err != nil {
+		t.Fatalf("loadConfig outside a git repo: %v", err)
+	}
+	if cfg.Policy.FailOn != "medium" {
+		t.Errorf("policy.fail_on = %q, want medium (cwd .gitl.yaml must still apply)", cfg.Policy.FailOn)
+	}
+}

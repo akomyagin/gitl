@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/akomyagin/gitl/internal/config"
+	"github.com/akomyagin/gitl/internal/gitlog"
 )
 
 // globalFlags holds values for root-level persistent flags shared by all
@@ -77,10 +78,30 @@ func setupLogging(verbose bool) {
 }
 
 // loadConfig loads the merged config for a command, honoring the --config
-// override and binding the command's flags for flag-level priority.
+// override and binding the command's flags for flag-level priority. The git
+// repository root is discovered best-effort so a committed root-level
+// .gitl.yaml (team policy, exclude_globs) applies even when gitl runs from a
+// subdirectory; the cwd .gitl.yaml still wins key-by-key.
 func loadConfig(cmd *cobra.Command, gf *globalFlags) (*config.Config, error) {
 	return config.Load(config.Options{
 		PersonalPath: gf.configPath,
+		RepoRootDir:  discoverRepoRoot(cmd.Context()),
 		Flags:        cmd.Flags(),
 	})
+}
+
+// discoverRepoRoot best-effort resolves the git working-tree root for config
+// discovery. Any failure (git not in PATH, cwd not inside a git repo, ...)
+// returns "" so config loading falls back to the cwd-only behavior — root
+// discovery must never fail a command.
+func discoverRepoRoot(ctx context.Context) string {
+	runner, err := gitlog.NewRunner("")
+	if err != nil {
+		return ""
+	}
+	root, err := runner.TopLevel(ctx)
+	if err != nil {
+		return ""
+	}
+	return root
 }

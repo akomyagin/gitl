@@ -38,8 +38,9 @@ func newMCPCmd(gf *globalFlags) *cobra.Command {
 			"  gitl_review — AI review of a commit range, a GitHub PR, or staged changes\n" +
 			"  gitl_digest — deterministic activity summary over the last N days\n\n" +
 			"Tool results are always the JSON artifact (the same schema as --format=json).\n" +
-			"Config is loaded once at startup from the current directory (.gitl.yaml +\n" +
-			"personal config + GITL_* env), exactly like the plain commands. stdout is\n" +
+			"Config is loaded once at startup (.gitl.yaml from the git repo root and the\n" +
+			"current directory, current directory winning on conflicts, plus personal\n" +
+			"config + GITL_* env), exactly like the plain commands. stdout is\n" +
 			"reserved for the protocol; warnings go to stderr.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

@@ -79,6 +79,10 @@ type Source interface {
 	// RemoteURL returns the fetch URL of the given remote (like
 	// `git remote get-url <remote>`). Errors when the remote does not exist.
 	RemoteURL(ctx context.Context, remote string) (string, error)
+	// TopLevel returns the absolute path of the working-tree root (like
+	// `git rev-parse --show-toplevel`) — used to find a repo-level .gitl.yaml
+	// even when gitl runs from a subdirectory. Errors outside a git work tree.
+	TopLevel(ctx context.Context) (string, error)
 }
 
 // Runner implements Source by shelling out to the system `git` binary.
@@ -202,6 +206,18 @@ func (r *Runner) RemoteNames(ctx context.Context) ([]string, error) {
 // A nonexistent remote is an error (git exits non-zero).
 func (r *Runner) RemoteURL(ctx context.Context, remote string) (string, error) {
 	out, err := r.run(ctx, "remote", "get-url", "--end-of-options", remote)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(out), nil
+}
+
+// TopLevel runs `git rev-parse --show-toplevel` and returns the absolute path
+// of the working-tree root. Outside a git work tree (or in a bare repo) git
+// exits non-zero and the error is returned as-is — callers that only need a
+// best-effort root (config discovery) treat any error as "no root found".
+func (r *Runner) TopLevel(ctx context.Context) (string, error) {
+	out, err := r.run(ctx, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
