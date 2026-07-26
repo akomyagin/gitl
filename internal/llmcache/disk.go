@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -124,6 +125,12 @@ func (c *diskCache) Get(key string) (llm.Response, bool, error) {
 
 	resp, ok, err := decodeResponse(data, c.ttl)
 	if err != nil {
+		// A corrupt/unreadable entry would otherwise be re-read (and re-fail) on
+		// every review with this key, silently forcing a full LLM call each time
+		// and never self-healing. Evict it best-effort and warn (mirrors remote.go's
+		// warn-on-parse-failure), so the NEXT review re-populates a clean entry.
+		_ = os.Remove(p)
+		slog.Warn("evicting corrupt llm cache entry", "path", p, "err", err)
 		return llm.Response{}, false, fmt.Errorf("cache %q: %w", p, err)
 	}
 	if !ok {
@@ -133,10 +140,19 @@ func (c *diskCache) Get(key string) (llm.Response, bool, error) {
 	return resp, true, nil
 }
 
-// Put atomically writes resp to the sharded path for key. It creates the shard
-// directory, writes to a uniquely-named temp file in the same directory, then
-// renames it into place so concurrent writers never observe a partial file.
+// Put atomically writes resp with CachedAt = now. It delegates to
+// putWithCachedAt; the split exists so tiered.Get can backfill L1 with the
+// original remote CachedAt (preserving the TTL clock) via the same atomic
+// write path without going through the public Put (which would reset the clock).
 func (c *diskCache) Put(key string, resp llm.Response) error {
+	return c.putWithCachedAt(key, resp, time.Now())
+}
+
+// putWithCachedAt atomically writes resp to the sharded path for key with an
+// explicit CachedAt. It creates the shard directory, writes to a uniquely-named
+// temp file in the same directory, then renames it into place so concurrent
+// writers never observe a partial file.
+func (c *diskCache) putWithCachedAt(key string, resp llm.Response, cachedAt time.Time) error {
 	s, err := shard(key)
 	if err != nil {
 		return err
@@ -146,7 +162,7 @@ func (c *diskCache) Put(key string, resp llm.Response) error {
 		return fmt.Errorf("create cache dir %q: %w", subdir, err)
 	}
 
-	data, err := encodeResponse(resp)
+	data, err := encodeResponseAt(resp, cachedAt)
 	if err != nil {
 		return err
 	}

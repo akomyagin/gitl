@@ -51,6 +51,15 @@ func newRemote(baseURL, token string, ttl, timeout time.Duration) (*remoteCache,
 	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, fmt.Errorf("remote cache url %q: must be an absolute http(s) URL", base)
 	}
+	// Defense-in-depth: a zero timeout means "no timeout" in net/http, which can
+	// hang a review forever against an unresponsive server (requests use
+	// context.Background()). config.validate() rejects timeout_ms<=0 when a URL is
+	// set, but newRemote can be reached directly (tests, future callers), so clamp
+	// a non-positive timeout to a safe default here too.
+	const defaultRemoteTimeout = 3 * time.Second
+	if timeout <= 0 {
+		timeout = defaultRemoteTimeout
+	}
 	return &remoteCache{
 		base:   base,
 		token:  token,
@@ -70,17 +79,25 @@ func (c *remoteCache) authorize(req *http.Request) {
 // unexpected status, malformed body — is a warn-and-miss, never a non-nil
 // error: the caller must fall through to the LLM, not fail the review.
 func (c *remoteCache) Get(key string) (llm.Response, bool, error) {
+	resp, _, ok := c.getWithCachedAt(key)
+	return resp, ok, nil
+}
+
+// getWithCachedAt is Get plus the entry's stored CachedAt — used only by
+// tiered.Get to backfill L1 with the original timestamp. Same warn-and-miss
+// degradation as Get.
+func (c *remoteCache) getWithCachedAt(key string) (llm.Response, time.Time, bool) {
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, c.base+"/"+key, nil)
 	if err != nil {
 		slog.Warn("remote cache get failed", "err", err)
-		return llm.Response{}, false, nil
+		return llm.Response{}, time.Time{}, false
 	}
 	c.authorize(req)
 
 	res, err := c.client.Do(req)
 	if err != nil {
 		slog.Warn("remote cache get failed", "err", err)
-		return llm.Response{}, false, nil
+		return llm.Response{}, time.Time{}, false
 	}
 	defer res.Body.Close()
 
@@ -89,23 +106,23 @@ func (c *remoteCache) Get(key string) (llm.Response, bool, error) {
 		// fall through to the body
 	case http.StatusNotFound:
 		slog.Debug("remote cache miss", "key", key[:min(len(key), 12)])
-		return llm.Response{}, false, nil
+		return llm.Response{}, time.Time{}, false
 	default:
 		slog.Warn("remote cache get failed", "status", res.StatusCode)
-		return llm.Response{}, false, nil
+		return llm.Response{}, time.Time{}, false
 	}
 
 	body, err := io.ReadAll(io.LimitReader(res.Body, maxRemoteBodyBytes))
 	if err != nil {
 		slog.Warn("remote cache get failed", "err", err)
-		return llm.Response{}, false, nil
+		return llm.Response{}, time.Time{}, false
 	}
-	resp, ok, err := decodeResponse(body, c.ttl)
+	resp, cachedAt, ok, err := decodeResponseAt(body, c.ttl)
 	if err != nil {
 		slog.Warn("remote cache get failed", "err", err)
-		return llm.Response{}, false, nil
+		return llm.Response{}, time.Time{}, false
 	}
-	return resp, ok, nil // ok == false means the entry exceeded the client-side TTL
+	return resp, cachedAt, ok // ok == false means the entry exceeded the client-side TTL
 }
 
 // Put stores resp under key. A failed store is warn-only and returns nil —

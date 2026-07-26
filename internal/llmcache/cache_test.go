@@ -210,3 +210,29 @@ func TestNewCacheDirCreated(t *testing.T) {
 		t.Fatalf("expected hit, got ok=%v err=%v", ok, err)
 	}
 }
+
+// TestCorruptEntryEvictedOnGet: a corrupt on-disk entry must be evicted on the
+// failing Get — otherwise it would be re-read (and re-fail) on every review
+// with this key, forcing a full LLM call each time and never self-healing.
+func TestCorruptEntryEvictedOnGet(t *testing.T) {
+	c := NewInDir(t.TempDir(), 24*time.Hour)
+	key := testKey()
+	if err := c.Put(key, sampleResponse()); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+
+	p, err := c.path(key)
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	if err := os.WriteFile(p, []byte("{not valid json"), 0o600); err != nil {
+		t.Fatalf("corrupt entry: %v", err)
+	}
+
+	if _, ok, err := c.Get(key); ok || err == nil {
+		t.Fatalf("corrupt entry must be (zero,false,err), got ok=%v err=%v", ok, err)
+	}
+	if _, err := os.Stat(p); !os.IsNotExist(err) {
+		t.Errorf("corrupt entry must be evicted from disk, Stat err = %v", err)
+	}
+}

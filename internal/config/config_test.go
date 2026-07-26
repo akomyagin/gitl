@@ -794,3 +794,46 @@ func TestDigestReposResolvedAgainstDeclaringDir(t *testing.T) {
 		t.Errorf("Digest.Repos[0].Path = %q, want %q (resolved against the declaring CWD dir)", cfg.Digest.Repos[0].Path, want)
 	}
 }
+
+// TestValidateRejectsZeroRemoteTimeout: an explicit cache.remote.timeout_ms of
+// 0 combined with a configured remote URL must be a loud config error — a zero
+// timeout means "no timeout" in net/http and could hang a review forever
+// against an unresponsive remote cache server.
+func TestValidateRejectsZeroRemoteTimeout(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "cache:\n  remote:\n    url: https://cache.example.com/gitl\n    timeout_ms: 0\n")
+	_, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err == nil {
+		t.Fatal("expected error for cache.remote.timeout_ms = 0 with a remote URL set")
+	}
+	if !strings.Contains(err.Error(), "cache.remote.timeout_ms") {
+		t.Errorf("error %q should mention cache.remote.timeout_ms", err)
+	}
+}
+
+// TestValidateAllowsZeroRemoteTimeoutWithoutURL: when the remote tier is off
+// (empty URL), timeout_ms is unused — a zero value must not fail validation.
+func TestValidateAllowsZeroRemoteTimeoutWithoutURL(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "cache:\n  remote:\n    timeout_ms: 0\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err != nil {
+		t.Errorf("Load() error = %v (timeout_ms 0 must be legal when the remote tier is off)", err)
+	}
+}
+
+// TestValidateAcceptsDefaultRemoteTimeout: a remote URL with no explicit
+// timeout must pass validation via the built-in 3000ms default.
+func TestValidateAcceptsDefaultRemoteTimeout(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "cache:\n  remote:\n    url: https://cache.example.com/gitl\n")
+	cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Cache.Remote.TimeoutMS != 3000 {
+		t.Errorf("cache.remote.timeout_ms = %d, want the 3000 default", cfg.Cache.Remote.TimeoutMS)
+	}
+}

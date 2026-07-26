@@ -219,3 +219,18 @@ func TestRemoteTokenNeverLogged(t *testing.T) {
 		t.Fatalf("bearer token leaked into logs:\n%s", out)
 	}
 }
+
+// TestNewRemoteClampsZeroTimeout: defense in depth behind config validation —
+// a non-positive timeout reaching newRemote directly must be clamped to the
+// safe default, never left at 0 ("no timeout" in net/http, which could hang a
+// review forever against an unresponsive server).
+func TestNewRemoteClampsZeroTimeout(t *testing.T) {
+	srv, _ := newKVServer(t)
+	c, err := newRemote(srv.URL, "", time.Hour, 0)
+	if err != nil {
+		t.Fatalf("newRemote: %v", err)
+	}
+	if c.client.Timeout != 3*time.Second {
+		t.Errorf("client.Timeout = %v, want the 3s clamp for a zero timeout", c.client.Timeout)
+	}
+}
