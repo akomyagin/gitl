@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"bytes"
+	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/akomyagin/gitl/internal/config"
 	"github.com/akomyagin/gitl/internal/gitlog"
@@ -523,5 +529,113 @@ func TestNewNetworkClientDispatchesByProvider(t *testing.T) {
 		if _, err := rawCompleterFor(p, provider); err != nil {
 			t.Errorf("rawCompleterFor(%s) must succeed, got: %v", provider, err)
 		}
+	}
+}
+
+// syncBuffer is a mutex-guarded bytes.Buffer, safe to write from the review
+// goroutine while the test goroutine reads it.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// TestBufferedReviewRendersBeforeCacheStore is the regression test for the
+// buffered-path store ordering: the rendered review must reach the user BEFORE
+// the cache store runs, so a slow remote-cache PUT (up to
+// cache.remote.timeout_ms) can never delay the visible output. The remote
+// cache's PUT handler blocks until the test releases it; the review runs in a
+// goroutine, and the output is asserted non-empty while the PUT is still held.
+func TestBufferedReviewRendersBeforeCacheStore(t *testing.T) {
+	const reviewBody = "buffered review body before store"
+
+	// Mock LLM endpoint (OpenAI-compatible), reusing the streaming test helper.
+	llmSrv := httptest.NewServer(&oneShotJSONHandler{
+		content: reviewBody + "\n```risk\n{\"level\":\"low\",\"summary\":\"ok\"}\n```",
+	})
+	t.Cleanup(llmSrv.Close)
+
+	// Remote cache: GET is always a miss; PUT signals putStarted then blocks
+	// until releaseCh is closed.
+	putStarted := make(chan struct{})
+	releaseCh := make(chan struct{})
+	var putOnce sync.Once
+	cacheSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPut:
+			putOnce.Do(func() { close(putStarted) })
+			<-releaseCh
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(cacheSrv.Close)
+
+	dir := setupRepo(t, false)
+
+	// All Setenv/Chdir on the main goroutine (t.Setenv forbids goroutine use).
+	t.Setenv("GITL_API_KEY", "sk-fake-cache-order")
+	t.Setenv("GITL_CACHE_REMOTE_URL", cacheSrv.URL)
+	t.Setenv("GITL_CACHE_REMOTE_TIMEOUT_MS", "30000")
+	t.Setenv("XDG_CACHE_HOME", t.TempDir()) // isolate the disk cache tier
+	t.Setenv("XDG_DATA_HOME", t.TempDir())  // isolate risk history
+	orig, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	emptyCfg := filepath.Join(t.TempDir(), "none.yaml")
+	out := &syncBuffer{}
+	var stderr bytes.Buffer
+	root := newRootCmd()
+	root.SetOut(out)
+	root.SetErr(&stderr)
+	root.SetArgs([]string{"review", "--config", emptyCfg, "HEAD~1..HEAD",
+		"--base-url", llmSrv.URL, "--no-stream"})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- root.ExecuteContext(context.Background())
+	}()
+
+	// The PUT must start (proving the store path runs at all) ...
+	select {
+	case <-putStarted:
+	case err := <-done:
+		t.Fatalf("review finished without a remote cache PUT (err=%v); output:\n%s", err, out.String())
+	case <-time.After(10 * time.Second):
+		t.Fatal("remote cache PUT never started")
+	}
+	// ... and by then the review must ALREADY be rendered: the store runs
+	// strictly after the output. Before the fix the store (and this blocked
+	// PUT) ran inside complete(), before rendering — out would still be empty.
+	if got := out.String(); !strings.Contains(got, reviewBody) {
+		t.Errorf("review output must be rendered before the cache store; got so far:\n%q", got)
+	}
+
+	close(releaseCh)
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("review: %v\nstderr: %s", err, stderr.String())
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("review did not finish after releasing the cache PUT")
 	}
 }

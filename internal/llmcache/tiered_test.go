@@ -1,7 +1,11 @@
 package llmcache
 
 import (
+	"encoding/json"
+	"errors"
+	"os"
 	"testing"
+	"time"
 
 	"github.com/akomyagin/gitl/internal/llm"
 )
@@ -132,5 +136,121 @@ func TestTieredRemoteNilIsLocalOnly(t *testing.T) {
 	}
 	if got != want {
 		t.Fatalf("mismatch: got %+v want %+v", got, want)
+	}
+}
+
+// errPutCache is a Cache stub whose Get always misses and whose Put always
+// fails with a fixed error — used to prove which tier's Put error tiered
+// surfaces vs swallows.
+type errPutCache struct {
+	err error
+}
+
+func (c errPutCache) Get(string) (llm.Response, bool, error) {
+	return llm.Response{}, false, nil
+}
+
+func (c errPutCache) Put(string, llm.Response) error {
+	return c.err
+}
+
+// TestTieredPutSurfacesLocalError: the L1 (disk) Put error must surface to the
+// caller so disk-only and tiered modes behave symmetrically (storeCache
+// debug-logs it), while the remote tier must still receive the write.
+func TestTieredPutSurfacesLocalError(t *testing.T) {
+	key := testKey()
+	want := sampleResponse()
+	localErr := errors.New("disk full")
+
+	remote := newMemCache()
+	tc := tiered{local: errPutCache{err: localErr}, remote: remote}
+
+	if err := tc.Put(key, want); !errors.Is(err, localErr) {
+		t.Fatalf("Put error = %v, want the local error %v", err, localErr)
+	}
+	if r, ok, _ := remote.Get(key); !ok || r != want {
+		t.Fatalf("remote must still receive the write despite the local error: ok=%v resp=%+v", ok, r)
+	}
+}
+
+// TestTieredPutRemoteErrorIgnored: the remote (L2) tier is best-effort — its
+// Put error must never surface, and the local write must succeed normally.
+func TestTieredPutRemoteErrorIgnored(t *testing.T) {
+	key := testKey()
+	want := sampleResponse()
+
+	local := newMemCache()
+	tc := tiered{local: local, remote: errPutCache{err: errors.New("remote down")}}
+
+	if err := tc.Put(key, want); err != nil {
+		t.Fatalf("Put must ignore the remote error, got %v", err)
+	}
+	if r, ok, _ := local.Get(key); !ok || r != want {
+		t.Fatalf("local after Put: ok=%v resp=%+v, want the stored response", ok, r)
+	}
+}
+
+// TestTieredBackfillPreservesCachedAt: when a remote hit backfills L1, the
+// local entry must carry the remote entry's ORIGINAL CachedAt — a fresh Put
+// would reset the TTL clock and let a near-expired remote entry live ~2×TTL
+// locally. Uses the real *diskCache and *remoteCache so the type-asserted
+// timestamp-preserving path is the one under test.
+func TestTieredBackfillPreservesCachedAt(t *testing.T) {
+	const ttl = 24 * time.Hour
+	key := testKey()
+	want := sampleResponse()
+
+	// Seed the remote KV store with an entry cached 23h ago — one hour from
+	// expiry under the 24h TTL.
+	origCachedAt := time.Now().UTC().Add(-23 * time.Hour).Truncate(time.Second)
+	data, err := json.Marshal(wireResponse{
+		CachedAt: origCachedAt,
+		Content:  want.Content,
+		Risk: wireRisk{
+			Level:     want.Risk.Level,
+			Summary:   want.Risk.Summary,
+			Heuristic: want.Risk.Heuristic,
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	srv, store := newKVServer(t)
+	store.Store("/"+key, data)
+
+	local := NewInDir(t.TempDir(), ttl)
+	remote := newTestRemote(t, srv.URL, "", ttl)
+	tc := tiered{local: local, remote: remote}
+
+	got, ok, err := tc.Get(key)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected remote hit")
+	}
+	if got != want {
+		t.Fatalf("mismatch: got %+v want %+v", got, want)
+	}
+
+	// Read the backfilled L1 file directly: its CachedAt must be the remote
+	// entry's original timestamp, not a fresh time.Now().
+	p, err := local.path(key)
+	if err != nil {
+		t.Fatalf("path: %v", err)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("read backfilled L1 entry: %v", err)
+	}
+	var w wireResponse
+	if err := json.Unmarshal(raw, &w); err != nil {
+		t.Fatalf("parse backfilled L1 entry: %v", err)
+	}
+	if !w.CachedAt.Equal(origCachedAt) {
+		t.Errorf("backfilled CachedAt = %v, want the original remote %v (TTL clock must not reset)", w.CachedAt, origCachedAt)
+	}
+	if time.Since(w.CachedAt) < 22*time.Hour {
+		t.Errorf("backfilled CachedAt %v is too recent — looks like a fresh Put reset the TTL clock", w.CachedAt)
 	}
 }

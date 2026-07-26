@@ -465,6 +465,9 @@ func (c *Config) validate() error {
 	if c.LLM.MaxTokens <= 0 {
 		return fmt.Errorf("llm.max_tokens must be > 0, got %d", c.LLM.MaxTokens)
 	}
+	if c.Cache.Remote.URL != "" && c.Cache.Remote.TimeoutMS <= 0 {
+		return fmt.Errorf("cache.remote.timeout_ms must be > 0 when cache.remote.url is set, got %d", c.Cache.Remote.TimeoutMS)
+	}
 	failOn := strings.ToLower(strings.TrimSpace(c.Policy.FailOn))
 	if failOn == "" {
 		failOn = "never"
