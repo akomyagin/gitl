@@ -192,6 +192,10 @@ func TestRemoteURLMatchesRepo(t *testing.T) {
 		{"GHE ssh remote against GHE host", "git@github.example.com:acme/widget.git", "github.example.com", "acme", "widget", true},
 		{"GHE remote against github.com host", "https://github.example.com/acme/widget.git", "github.com", "acme", "widget", false},
 		{"empty URL", "", "github.com", "acme", "widget", false},
+		{"ssh:// with explicit port", "ssh://git@github.com:22/acme/widget.git", "github.com", "acme", "widget", true},
+		{"ssh:// with explicit port, no .git", "ssh://git@github.com:2222/acme/widget", "github.com", "acme", "widget", true},
+		{"ssh:// with port, GHE host", "ssh://git@git.example.com:2222/acme/widget.git", "git.example.com", "acme", "widget", true},
+		{"ssh:// with port, wrong repo", "ssh://git@github.com:22/acme/other.git", "github.com", "acme", "widget", false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

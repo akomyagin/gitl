@@ -188,6 +188,37 @@ func TestMissingRequiredCategories(t *testing.T) {
 	}
 }
 
+// TestBreakingFooterSeparators: Conventional Commits v1.0.0 allows both
+// "BREAKING CHANGE" (space) and "BREAKING-CHANGE" (hyphen) footer tokens;
+// an underscore variant is not a valid synonym.
+func TestBreakingFooterSeparators(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		body         string
+		wantBreaking bool
+		wantText     string
+	}{
+		{"space separator", "BREAKING CHANGE: session tokens invalidated", true, "session tokens invalidated"},
+		{"hyphen separator", "BREAKING-CHANGE: session tokens invalidated", true, "session tokens invalidated"},
+		{"underscore is NOT a valid synonym", "BREAKING_CHANGE: session tokens invalidated", false, ""},
+		{"no footer at all", "just a normal body", false, ""},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e := categorizeOne(Commit{Hash: "abcdefg", Subject: "feat: x", Body: tc.body})
+			if e.Breaking != tc.wantBreaking {
+				t.Fatalf("Breaking = %v, want %v", e.Breaking, tc.wantBreaking)
+			}
+			if tc.wantBreaking && e.BreakingText != tc.wantText {
+				t.Errorf("BreakingText = %q, want %q", e.BreakingText, tc.wantText)
+			}
+		})
+	}
+}
+
 func equalStringSlices(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
