@@ -97,19 +97,23 @@ func dataDir() (string, error) {
 }
 
 // RepoKey computes the stable identity used to correlate review records with a
-// repository. It prefers the origin remote URL (normalized: trimmed, ".git"
-// suffix dropped) and falls back to the absolute worktree root when there is
-// no origin remote. Never returns an error — on total failure it returns ""
-// and the caller writes/filters on the empty key (records still logged, just
-// not correlatable; acceptable for v1).
-//
-// Known limitation (v1): no cross-scheme normalization — an ssh and an https
-// URL for the same repository produce different keys.
+// repository. It prefers the origin remote URL, canonicalized via
+// gitlog.ParseRemoteURL into "host/owner/repo" (lowercase, scheme-free,
+// .git-free) — identical for the ssh and https forms of the same repository —
+// and falls back to the absolute worktree root when there is no origin remote.
+// Never returns an error — on total failure it returns "" and the caller
+// writes/filters on the empty key (records still logged, just not
+// correlatable; acceptable for v1).
 func RepoKey(ctx context.Context, runner *gitlog.Runner) string {
 	if runner == nil {
 		return ""
 	}
 	if url, err := runner.RemoteURL(ctx, "origin"); err == nil {
+		if r, ok := gitlog.ParseRemoteURL(url); ok {
+			return strings.ToLower(r.Host) + "/" + strings.ToLower(r.Owner) + "/" + strings.ToLower(r.Repo)
+		}
+		// Unparsed remote (local path, exotic scheme): fall back to the trimmed
+		// raw URL so a key is still produced, rather than dropping to worktree root.
 		if key := strings.TrimSuffix(strings.TrimSpace(url), ".git"); key != "" {
 			return key
 		}
