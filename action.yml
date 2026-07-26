@@ -54,7 +54,7 @@ inputs:
       commit SHA under test, to exercise in-progress code before a tag
       exists).
     required: false
-    default: "v0.6.0"
+    default: "v0.6.1"
   base-sha:
     description: >-
       Base SHA of the range to review. If left empty, falls back to the
