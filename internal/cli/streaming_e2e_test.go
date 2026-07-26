@@ -389,3 +389,77 @@ func TestNonStreamingProviderNoWarningWhenStreamOff(t *testing.T) {
 		t.Errorf("terminal output missing the review body:\n%s", out)
 	}
 }
+
+// streamedReviewBody is the review text the SSE mock server streams token by
+// token before the trailing risk block.
+const streamedReviewBody = "This is the streamed review body."
+
+// sseReviewHandler emulates an OpenAI-compatible streaming chat/completions
+// endpoint: it answers every request with a text/event-stream body whose
+// deltas carry the review text and then a trailing ```risk block — with the
+// marker deliberately split across two deltas, the same shape the unit tests
+// in internal/llm exercise (TestStreamSuppressesRiskBlockFromTerminal).
+type sseReviewHandler struct {
+	calls atomic.Int32
+}
+
+func (h *sseReviewHandler) ServeHTTP(w http.ResponseWriter, _ *http.Request) {
+	h.calls.Add(1)
+	w.Header().Set("Content-Type", "text/event-stream")
+	chunks := []string{
+		streamedReviewBody,
+		"\n``",
+		"`risk\n{\"level\":\"low\",\"summary\":\"streamed ok\"}\n```",
+	}
+	for _, c := range chunks {
+		delta, err := json.Marshal(map[string]any{
+			"choices": []map[string]any{{"delta": map[string]any{"content": c}}},
+		})
+		if err != nil {
+			panic(fmt.Sprintf("marshal mock SSE delta: %v", err))
+		}
+		fmt.Fprintf(w, "data: %s\n\n", delta)
+	}
+	fmt.Fprint(w, "data: [DONE]\n\n")
+}
+
+// TestStreamingSuppressesRiskBlockEndToEnd: on a real TTY the streaming branch
+// is active and the stream carries a trailing ```risk block. The terminal must
+// receive the review body and the RENDERED risk header ("**Risk:** ..."), but
+// never the raw fenced risk block or its JSON payload — the same contract the
+// buffered path upholds via ParseRisk.
+func TestStreamingSuppressesRiskBlockEndToEnd(t *testing.T) {
+	handler := &sseReviewHandler{}
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	dir := setupRepo(t, false)
+	env := map[string]string{"GITL_API_KEY": "sk-fake-e2e"}
+
+	out, err := runReviewOnPTY(t, dir, env,
+		"HEAD~1..HEAD", "--base-url", srv.URL, "--no-cache")
+	if err != nil {
+		t.Fatalf("streaming review must succeed, got: %v", err)
+	}
+
+	// 1. The raw risk block must not reach the terminal in any form.
+	if strings.Contains(out, "```risk") {
+		t.Errorf("raw risk block leaked to the terminal:\n%s", out)
+	}
+	if strings.Contains(out, `{"level":`) {
+		t.Errorf("risk JSON payload leaked to the terminal:\n%s", out)
+	}
+
+	// 2. The review body and the rendered risk header did.
+	if !strings.Contains(out, streamedReviewBody) {
+		t.Errorf("terminal output missing the streamed review body:\n%s", out)
+	}
+	if !strings.Contains(out, "**Risk:**") {
+		t.Errorf("terminal output missing the rendered risk header:\n%s", out)
+	}
+
+	// 3. Streaming itself succeeded: exactly one request, no Complete fallback.
+	if got := handler.calls.Load(); got != 1 {
+		t.Errorf("server saw %d request(s), want exactly 1 (streaming only, no fallback)", got)
+	}
+}

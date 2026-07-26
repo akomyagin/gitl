@@ -395,13 +395,17 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 			"provider", cfg.LLM.Provider)
 	}
 
-	art, err := plan.complete(ctx, provider)
+	art, resp, err := plan.complete(ctx, provider)
 	if err != nil {
 		return err
 	}
 	if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
 		return err
 	}
+	// Cache store happens AFTER the user sees the review: a slow remote-cache PUT
+	// (up to cache.remote.timeout_ms) must not delay output. The streaming branch
+	// already stores post-output; this keeps the buffered path symmetric.
+	plan.storeCache(resp)
 
 	// Gate LAST, only after the review has been printed (§9).
 	return finishReview(ctx, cfg, src, art.RiskLevel, art.RiskSummary, art.RiskHeuristic)

@@ -21,6 +21,8 @@ func TestParseRemoteURL(t *testing.T) {
 		{"ssh scp-like", "git@github.com:owner/repo.git", RemoteRepo{"github.com", "owner", "repo"}, true},
 		{"ssh scp-like without .git", "git@example.com:me/proj", RemoteRepo{"example.com", "me", "proj"}, true},
 		{"ssh:// scheme", "ssh://git@github.com/owner/repo.git", RemoteRepo{"github.com", "owner", "repo"}, true},
+		{"ssh:// scheme with explicit port", "ssh://git@github.com:22/owner/repo.git", RemoteRepo{"github.com", "owner", "repo"}, true},
+		{"ssh:// scheme with port, no .git", "ssh://git@git.example.com:2222/owner/repo", RemoteRepo{"git.example.com", "owner", "repo"}, true},
 		{"surrounding whitespace", "  https://github.com/owner/repo.git\n", RemoteRepo{"github.com", "owner", "repo"}, true},
 		{"local path", "/home/user/repos/proj", RemoteRepo{}, false},
 		{"file scheme", "file:///home/user/repos/proj", RemoteRepo{}, false},

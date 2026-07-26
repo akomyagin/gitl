@@ -201,15 +201,17 @@ func (p *reviewPlan) storeCache(resp llm.Response) {
 }
 
 // complete runs the buffered (non-streaming) provider call and assembles the
-// final artifact, storing the response in the cache on the way.
-func (p *reviewPlan) complete(ctx context.Context, provider llm.Provider) (render.Artifact, error) {
+// final artifact. It does NOT store the response in the cache: the caller stores
+// it AFTER rendering (buffered CLI path) so a slow remote-cache PUT never delays
+// the user-visible output. Callers that don't render (RunReviewCore) store it
+// themselves right after this returns.
+func (p *reviewPlan) complete(ctx context.Context, provider llm.Provider) (render.Artifact, llm.Response, error) {
 	slog.Debug("requesting review", "commits", len(p.src.Commits), "diff_bytes", len(p.diff), "offline", p.cfg.OfflineMode())
 	resp, err := provider.Complete(ctx, p.request())
 	if err != nil {
-		return render.Artifact{}, fmt.Errorf("review failed: %w", err)
+		return render.Artifact{}, llm.Response{}, fmt.Errorf("review failed: %w", err)
 	}
-	p.storeCache(resp)
-	return buildArtifact(p.cfg, p.src.Label, p.src.Commits, p.diff, resp), nil
+	return buildArtifact(p.cfg, p.src.Label, p.src.Commits, p.diff, resp), resp, nil
 }
 
 // RunReviewCore executes the full review pipeline for one resolved diffSource
@@ -240,7 +242,12 @@ func RunReviewCore(ctx context.Context, cfg *config.Config, src diffSource, opts
 	if err != nil {
 		return render.Artifact{}, err
 	}
-	return plan.complete(ctx, provider)
+	art, resp, err := plan.complete(ctx, provider)
+	if err != nil {
+		return render.Artifact{}, err
+	}
+	plan.storeCache(resp)
+	return art, nil
 }
 
 // gateFailOn implements the --fail-on CI gate (§9): a non-nil failError when
