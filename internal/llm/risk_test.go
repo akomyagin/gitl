@@ -252,3 +252,40 @@ func TestRiskAtLeast(t *testing.T) {
 		}
 	}
 }
+
+// TestSensitiveKeywordWordBoundary: keyword detection must match whole tokens,
+// not substrings — "auth" hits "auth.go"/"auth_token" but NOT "author"/
+// "AUTHORS.md"/"authored". Guards the false-HIGH bug where a changelog edit
+// naming an author, or an AUTHORS.md file, was scored HIGH.
+func TestSensitiveKeywordWordBoundary(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name string
+		path string
+		hit  bool
+	}{
+		{"auth as path segment", "internal/auth/x.go", true},
+		{"auth as filename token", "auth.go", true},
+		{"auth snake_case token", "auth_token.go", true},
+		{"auth kebab token", "auth-service.go", true},
+		{"author is not auth", "CHANGELOG-author.md", false},
+		{"authored is not auth", "docs/authored.md", false},
+		{"AUTHORS file is not auth", "AUTHORS.md", false},
+		{"oauth is not auth", "oauth2client.go", false},
+		{"security token", "internal/security/perm.go", true},
+		{"payment plural not exact", "payments.go", false},
+		{"payment exact", "payment.go", true},
+		{"benign readme", "README.md", false},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := HeuristicRisk(commitsWith(gitlog.FileChange{Status: "M", Path: tc.path}), "+x\n")
+			isHigh := got.Level == RiskHigh
+			if isHigh != tc.hit {
+				t.Errorf("path %q: HIGH=%v, want %v (level=%q, summary=%q)", tc.path, isHigh, tc.hit, got.Level, got.Summary)
+			}
+		})
+	}
+}

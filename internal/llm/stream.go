@@ -2,6 +2,7 @@ package llm
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -129,6 +130,83 @@ func (s *sanitizingWriter) flush() error {
 	return err
 }
 
+// riskBlockMarker is the exact byte sequence that opens the trailing risk
+// block the model emits per the review prompt contract (a fenced code block
+// tagged `risk`, the last thing in the reply). On the streaming path this
+// block must be parsed (ParseRisk over the full buffer) but NOT shown to the
+// user — the buffered path strips it via ParseRisk, and the two output paths
+// must not diverge.
+const riskBlockMarker = "```risk"
+
+// riskBlockGate forwards streamed text to the terminal writer until it
+// detects the start of the risk block, then suppresses everything from that
+// point on. Because the risk block is, by prompt contract, the LAST thing the
+// model outputs, suppression never needs to resume — a one-way latch is
+// sufficient and robust.
+//
+// The marker may be split across SSE deltas, so up to len(marker)-1 trailing
+// bytes are held back before being forwarded: they might turn out to be the
+// prefix of the marker once the next delta arrives. On stream end (flush) any
+// held-back tail that did NOT become the marker is emitted.
+type riskBlockGate struct {
+	w        *sanitizingWriter
+	held     []byte
+	suppress bool
+}
+
+func (g *riskBlockGate) write(p string) error {
+	if g.suppress {
+		return nil
+	}
+	buf := append(g.held, p...)
+	g.held = nil
+
+	if idx := bytes.Index(buf, []byte(riskBlockMarker)); idx >= 0 {
+		g.suppress = true
+		return g.emit(buf[:idx])
+	}
+
+	keep := longestMarkerPrefixSuffix(buf)
+	forward := buf[:len(buf)-keep]
+	g.held = append([]byte(nil), buf[len(buf)-keep:]...)
+	return g.emit(forward)
+}
+
+func (g *riskBlockGate) emit(b []byte) error {
+	if len(b) == 0 {
+		return nil
+	}
+	_, err := g.w.Write(b)
+	return err
+}
+
+func (g *riskBlockGate) flush() error {
+	if g.suppress || len(g.held) == 0 {
+		g.held = nil
+		return nil
+	}
+	tail := g.held
+	g.held = nil
+	return g.emit(tail)
+}
+
+// longestMarkerPrefixSuffix returns the length of the longest suffix of buf
+// that is a prefix of riskBlockMarker. Those trailing bytes are held back
+// because the next delta might complete the marker. Bounded by len(marker)-1.
+func longestMarkerPrefixSuffix(buf []byte) int {
+	m := []byte(riskBlockMarker)
+	max := len(m) - 1
+	if max > len(buf) {
+		max = len(buf)
+	}
+	for n := max; n > 0; n-- {
+		if bytes.Equal(buf[len(buf)-n:], m[:n]) {
+			return n
+		}
+	}
+	return 0
+}
+
 // Stream sends a streaming chat/completions request and writes each token to w
 // as it arrives, accumulating the full text so the risk block can be parsed
 // after the stream completes. Unlike Complete, it performs NO retry: once any
@@ -175,8 +253,12 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 	// Terminal-facing writer: strip control characters as tokens arrive. buf
 	// below intentionally keeps the RAW text — ParseRisk needs the unfiltered
 	// stream, and the risk header is sanitized on output via
-	// render.RiskHeaderLine.
+	// render.RiskHeaderLine. The riskBlockGate additionally cuts the trailing
+	// ```risk block out of the TERMINAL output only (never out of buf), so the
+	// streaming path no longer diverges from the buffered path, which strips
+	// that block via ParseRisk before rendering.
 	sw := &sanitizingWriter{w: w}
+	gate := &riskBlockGate{w: sw}
 
 	var buf strings.Builder
 	// Cap the TOTAL bytes read from the streaming body at the same threshold
@@ -228,13 +310,18 @@ func (c *Client) Stream(ctx context.Context, req Request, w io.Writer) (Response
 		if delta == "" {
 			continue
 		}
-		if _, err := io.WriteString(sw, delta); err != nil {
+		if err := gate.write(delta); err != nil {
 			return Response{}, fmt.Errorf("llm: write stream output: %w", err)
 		}
 		buf.WriteString(delta)
 	}
-	// True end of stream: emit any incomplete trailing UTF-8 sequence still
-	// held by the sanitizer so a legitimately truncated final rune is not lost.
+	// True end of stream: first release any held-back tail that never became
+	// the risk-block marker, then emit any incomplete trailing UTF-8 sequence
+	// still held by the sanitizer so a legitimately truncated final rune is not
+	// lost.
+	if err := gate.flush(); err != nil {
+		return Response{}, fmt.Errorf("llm: write stream output: %w", err)
+	}
 	if err := sw.flush(); err != nil {
 		return Response{}, fmt.Errorf("llm: write stream output: %w", err)
 	}

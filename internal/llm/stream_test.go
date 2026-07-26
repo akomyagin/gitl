@@ -48,12 +48,13 @@ func TestStreamHappyPath(t *testing.T) {
 		t.Fatalf("Stream: %v", err)
 	}
 
-	// Streamed text (including the raw risk block) is written to w verbatim.
+	// Streamed body text is written to w; the trailing risk block is not.
 	if !strings.Contains(w.String(), "Hello world") {
 		t.Errorf("streamed output missing text; got %q", w.String())
 	}
-	if !strings.Contains(w.String(), "```risk") {
-		t.Errorf("streamed output should contain raw risk block; got %q", w.String())
+	// The raw risk block is suppressed from the terminal (parsed from buf, not shown).
+	if strings.Contains(w.String(), "```risk") {
+		t.Errorf("streamed output must NOT contain raw risk block; got %q", w.String())
 	}
 
 	// resp.Content has the risk block stripped.
@@ -515,5 +516,64 @@ func TestStreamWithoutDoneButWithContentSucceeds(t *testing.T) {
 	}
 	if !strings.Contains(w.String(), "Hello world") {
 		t.Errorf("streamed output = %q, want it to contain %q", w.String(), "Hello world")
+	}
+}
+
+// TestStreamSuppressesRiskBlockFromTerminal: the ```risk block the model emits
+// per the prompt contract must be parsed (buf → ParseRisk) but NOT written to
+// the terminal writer — the buffered path strips it via ParseRisk, and the two
+// output paths must not diverge (bug: streaming leaked the raw JSON block).
+func TestStreamSuppressesRiskBlockFromTerminal(t *testing.T) {
+	t.Parallel()
+	// Marker deliberately SPLIT across deltas.
+	payload := "data: {\"choices\":[{\"delta\":{\"content\":\"Review body here.\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"\\n``\"}}]}\n\n" +
+		"data: {\"choices\":[{\"delta\":{\"content\":\"`risk\\n{\\\"level\\\":\\\"high\\\",\\\"summary\\\":\\\"danger\\\"}\\n```\"}}]}\n\n" +
+		"data: [DONE]\n\n"
+	srv := sseServer(t, payload)
+	defer srv.Close()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	resp, err := c.Stream(context.Background(), Request{User: "hi", Model: "m"}, &w)
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	term := w.String()
+	if strings.Contains(term, "```risk") {
+		t.Errorf("raw risk block leaked to terminal:\n%q", term)
+	}
+	if strings.Contains(term, "\"level\"") || strings.Contains(term, "danger") {
+		t.Errorf("risk JSON payload leaked to terminal:\n%q", term)
+	}
+	if !strings.Contains(term, "Review body here.") {
+		t.Errorf("body text missing from terminal:\n%q", term)
+	}
+	if resp.Risk.Level != RiskHigh || resp.Risk.Heuristic {
+		t.Errorf("risk = %+v, want model-scored HIGH", resp.Risk)
+	}
+	if strings.Contains(resp.Content, "```risk") {
+		t.Errorf("resp.Content should have block stripped:\n%q", resp.Content)
+	}
+}
+
+// TestStreamHeldBackMarkerPrefixFlushedAtEnd guards the gate's flush path: a
+// stream whose final delta ENDS with a prefix of the marker that never
+// completes (e.g. trailing backticks of an ordinary fence) must still deliver
+// those held-back bytes to the terminal at end of stream.
+func TestStreamHeldBackMarkerPrefixFlushedAtEnd(t *testing.T) {
+	t.Parallel()
+	payload := "data: {\"choices\":[{\"delta\":{\"content\":\"code fence: ``\"}}]}\n\n" +
+		"data: [DONE]\n\n"
+	srv := sseServer(t, payload)
+	defer srv.Close()
+
+	c := newStreamClient(t, srv.URL)
+	var w bytes.Buffer
+	if _, err := c.Stream(context.Background(), Request{User: "hi", Model: "m"}, &w); err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got := w.String(); got != "code fence: ``" {
+		t.Errorf("terminal output = %q, want %q (held-back marker prefix must flush)", got, "code fence: ``")
 	}
 }

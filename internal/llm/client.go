@@ -339,7 +339,11 @@ func (c *Client) doOnce(ctx context.Context, body []byte) (string, error) {
 	if len(parsed.Choices) == 0 {
 		return "", fmt.Errorf("llm: %s API returned no choices", c.provider)
 	}
-	return parsed.Choices[0].Message.Content, nil
+	content := parsed.Choices[0].Message.Content
+	if content == "" {
+		return "", fmt.Errorf("llm: %s API returned empty content", c.provider)
+	}
+	return content, nil
 }
 
 // networkError marks a transport-level failure as retryable.
