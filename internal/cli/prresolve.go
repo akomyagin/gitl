@@ -148,29 +148,20 @@ func parseGitHubOwnerRepo(url string) (host, owner, repo string, ok bool) {
 	return m[1], m[2], m[3], true
 }
 
-// Remote URL forms that identify a hosted git repository: https (with or
-// without a trailing .git) and ssh scp-like syntax. The host is captured
-// (not assumed to be github.com), so GitHub Enterprise remotes match the
-// same way — remoteURLMatchesRepo requires the host to equal the one gh
-// reported for the PR, so this stays a strict, host-scoped comparison, not
-// an open-ended "any git host" match. Owner/repo comparison is
-// case-insensitive, matching GitHub's own semantics.
-var (
-	httpsRemotePattern = regexp.MustCompile(`(?i)^https://([^/]+)/([^/]+)/([^/]+?)(?:\.git)?/?$`)
-	sshRemotePattern   = regexp.MustCompile(`(?i)^(?:ssh://)?git@([^:/]+)[:/]([^/]+)/([^/]+?)(?:\.git)?$`)
-)
-
 // remoteURLMatchesRepo reports whether a `git remote get-url` result points
-// at the given host/owner/repo, accepting both https and ssh URL forms.
-// Pure function.
+// at the given host/owner/repo, accepting both https and ssh URL forms
+// (parsed by the shared gitlog.ParseRemoteURL). The host must equal the one
+// gh reported for the PR, so this stays a strict, host-scoped comparison,
+// not an open-ended "any git host" match. Owner/repo comparison is
+// case-insensitive, matching GitHub's own semantics. Pure function.
 func remoteURLMatchesRepo(remoteURL, host, owner, repo string) bool {
-	u := strings.TrimSpace(remoteURL)
-	for _, re := range []*regexp.Regexp{httpsRemotePattern, sshRemotePattern} {
-		if m := re.FindStringSubmatch(u); m != nil {
-			return strings.EqualFold(m[1], host) && strings.EqualFold(m[2], owner) && strings.EqualFold(m[3], repo)
-		}
+	r, ok := gitlog.ParseRemoteURL(remoteURL)
+	if !ok {
+		return false
 	}
-	return false
+	return strings.EqualFold(r.Host, host) &&
+		strings.EqualFold(r.Owner, owner) &&
+		strings.EqualFold(r.Repo, repo)
 }
 
 // resolveRemoteName finds the local remote whose URL points at the PR's

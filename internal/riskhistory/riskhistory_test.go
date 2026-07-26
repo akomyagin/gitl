@@ -338,10 +338,24 @@ func TestRepoKey(t *testing.T) {
 		t.Errorf("RepoKey without origin = %q, want worktree root %q", key, root)
 	}
 
-	// With an origin remote → normalized URL (trimmed, .git suffix dropped).
+	// With an origin remote → canonical "host/owner/repo" key (lowercase,
+	// scheme-free, .git-free).
 	runGit(t, dir, "remote", "add", "origin", "https://example.com/me/proj.git")
-	if key := RepoKey(ctx, runner); key != "https://example.com/me/proj" {
-		t.Errorf("RepoKey with origin = %q, want %q", key, "https://example.com/me/proj")
+	if key := RepoKey(ctx, runner); key != "example.com/me/proj" {
+		t.Errorf("RepoKey with https origin = %q, want %q", key, "example.com/me/proj")
+	}
+
+	// The ssh scp-like form of the SAME repository must produce the SAME key —
+	// the whole point of the canonical normalization (cross-scheme invariance).
+	runGit(t, dir, "remote", "set-url", "origin", "git@example.com:me/proj.git")
+	if key := RepoKey(ctx, runner); key != "example.com/me/proj" {
+		t.Errorf("RepoKey with ssh origin = %q, want %q", key, "example.com/me/proj")
+	}
+
+	// Mixed-case owner/repo lowercases into the same key (case invariance).
+	runGit(t, dir, "remote", "set-url", "origin", "git@example.com:Me/Proj.git")
+	if key := RepoKey(ctx, runner); key != "example.com/me/proj" {
+		t.Errorf("RepoKey with mixed-case origin = %q, want %q", key, "example.com/me/proj")
 	}
 
 	// Total failure tolerance: a nil runner yields "" — never a panic.

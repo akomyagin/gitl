@@ -348,8 +348,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 		}
 		// A cache hit is still a review event: the trend log records the
 		// CHRONOLOGY of reviews, so cached results are logged too (no dedup).
-		recordRiskHistory(ctx, cfg, src, art.RiskLevel, art.RiskSummary, art.RiskHeuristic)
-		return gateFailOn(cfg, art.RiskLevel)
+		return finishReview(ctx, cfg, src, art.RiskLevel, art.RiskSummary, art.RiskHeuristic)
 	}
 
 	// --dry-run: print the estimate, no network call, exit 0.
@@ -383,8 +382,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 			// Risk header printed after [DONE] — body already written by Stream.
 			fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLine(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic))
 			plan.storeCache(resp)
-			recordRiskHistory(ctx, cfg, src, resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic)
-			return gateFailOn(cfg, resp.Risk.Level)
+			return finishReview(ctx, cfg, src, resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic)
 		}
 		if cw.written > 0 {
 			// Tokens already reached the terminal — partial output can't be undone.
@@ -406,8 +404,16 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	}
 
 	// Gate LAST, only after the review has been printed (§9).
-	recordRiskHistory(ctx, cfg, src, art.RiskLevel, art.RiskSummary, art.RiskHeuristic)
-	return gateFailOn(cfg, art.RiskLevel)
+	return finishReview(ctx, cfg, src, art.RiskLevel, art.RiskSummary, art.RiskHeuristic)
+}
+
+// finishReview records the risk-history entry for this review and applies the
+// --fail-on gate — the single convergence point for every success path in
+// runReview (warm-cache, streaming, buffered), so a future 4th path cannot
+// silently skip either the history log or the CI gate.
+func finishReview(ctx context.Context, cfg *config.Config, src diffSource, level, summary string, heuristic bool) error {
+	recordRiskHistory(ctx, cfg, src, level, summary, heuristic)
+	return gateFailOn(cfg, level)
 }
 
 // recordRiskHistory appends one risk-history record for a completed review.
