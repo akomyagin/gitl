@@ -2,8 +2,8 @@
 #
 # This manifest is what a pipe repository / the Bitbucket pipe directory
 # consumes; plain `- pipe: docker://<image>:<tag>` usage (the way the README
-# documents while the pipe is unpublished) reads only the image itself, in
-# which case this file serves as the authoritative variables reference.
+# documents) reads only the image itself, in which case this file serves as
+# the authoritative variables reference.
 #
 # Version-sync invariant (same rule as action.yml's gitl-version.default,
 # docs/TECHNICAL_PLAN.md §12.2): the image tag below must match the gitl
@@ -11,9 +11,12 @@
 # docker-publish job in .github/workflows/release.yml verifies this before
 # pushing the image.
 #
-# NOTE: the image is not published to Docker Hub yet (the release workflow
-# skips the push until DOCKERHUB_USERNAME/DOCKERHUB_TOKEN secrets are
-# provisioned) — until then, build it locally from the repository root:
+# The image is published to Docker Hub automatically on every release tag by
+# the docker-publish job in .github/workflows/release.yml (since v0.5.2),
+# tagged both X.Y.Z and (for stable releases) latest. Consume it directly:
+#   - pipe: docker://alkom68/gitl-review-pipe:0.6.0
+# or pull it standalone: `docker pull alkom68/gitl-review-pipe:0.6.0`. Building
+# locally from the repository root stays possible for development:
 #   docker build -f bitbucket-pipe/Dockerfile -t alkom68/gitl-review-pipe:0.6.0 .
 
 name: gitl review

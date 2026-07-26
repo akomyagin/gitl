@@ -64,6 +64,17 @@ RUN CGO_ENABLED=0 go build -trimpath \
 #     layers on top of a ~8 MB base.
 FROM alpine:3.20
 
+# Re-declared: ARGs from the builder stage don't cross a new FROM. Reused
+# here only to stamp the OCI labels below with the same version/commit that
+# -ldflags baked into the gitl binary, so `docker inspect` and `gitl version`
+# agree without a second source of truth.
+ARG GITL_VERSION=dev
+ARG GITL_COMMIT=unknown
+
+LABEL org.opencontainers.image.source="https://github.com/akomyagin/gitl" \
+      org.opencontainers.image.version="${GITL_VERSION}" \
+      org.opencontainers.image.revision="${GITL_COMMIT}"
+
 # ca-certificates: TLS trust for curl → api.bitbucket.org (and for gitl's
 # own LLM calls when GITL_API_KEY is set).
 RUN apk add --no-cache bash git curl jq ca-certificates
