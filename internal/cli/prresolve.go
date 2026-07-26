@@ -156,8 +156,24 @@ func parseGitHubOwnerRepo(url string) (host, owner, repo string, ok bool) {
 // an open-ended "any git host" match. Owner/repo comparison is
 // case-insensitive, matching GitHub's own semantics.
 var (
+	// httpsRemotePattern — HTTPS remotes (unchanged; already correct).
 	httpsRemotePattern = regexp.MustCompile(`(?i)^https://([^/]+)/([^/]+)/([^/]+?)(?:\.git)?/?$`)
-	sshRemotePattern   = regexp.MustCompile(`(?i)^(?:ssh://)?git@([^:/]+)[:/]([^/]+)/([^/]+?)(?:\.git)?$`)
+
+	// sshSchemeRemotePattern — the explicit "ssh://" URL form, with an
+	// OPTIONAL ":port" before the path (RFC-style ssh:// URLs put the port
+	// between host and path, e.g. self-hosted GitLab/Gitea on a non-standard
+	// port). Groups:
+	//   1: host  — ([^:/]+)   stops at ":" (port) or "/" (path)
+	//   (?::\d+)? — optional literal ":" + digits, NOT captured (the port is
+	//               irrelevant to owner/repo identity)
+	//   2: owner — ([^/]+)
+	//   3: repo  — ([^/]+?)   lazy, so an optional ".git" suffix is stripped
+	sshSchemeRemotePattern = regexp.MustCompile(`(?i)^ssh://git@([^:/]+)(?::\d+)?/([^/]+)/([^/]+?)(?:\.git)?/?$`)
+
+	// sshSCPRemotePattern — the SCP-like short form "git@host:owner/repo(.git)"
+	// with NO "ssh://" scheme and NO port: here ":" is the host/path separator,
+	// not a port delimiter. Groups mirror the scheme form (host, owner, repo).
+	sshSCPRemotePattern = regexp.MustCompile(`(?i)^git@([^:/]+):([^/]+)/([^/]+?)(?:\.git)?/?$`)
 )
 
 // remoteURLMatchesRepo reports whether a `git remote get-url` result points
@@ -165,7 +181,7 @@ var (
 // Pure function.
 func remoteURLMatchesRepo(remoteURL, host, owner, repo string) bool {
 	u := strings.TrimSpace(remoteURL)
-	for _, re := range []*regexp.Regexp{httpsRemotePattern, sshRemotePattern} {
+	for _, re := range []*regexp.Regexp{httpsRemotePattern, sshSchemeRemotePattern, sshSCPRemotePattern} {
 		if m := re.FindStringSubmatch(u); m != nil {
 			return strings.EqualFold(m[1], host) && strings.EqualFold(m[2], owner) && strings.EqualFold(m[3], repo)
 		}

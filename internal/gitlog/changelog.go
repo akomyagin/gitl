@@ -78,9 +78,13 @@ type Changelog struct {
 	Breaking []ChangelogEntry
 }
 
-// breakingChangeRe matches a "BREAKING CHANGE:" footer line (conventional-
-// commits spec — case-sensitive by convention).
-var breakingChangeRe = regexp.MustCompile(`(?m)^BREAKING CHANGE:\s*(.*)$`)
+// breakingChangeRe matches a breaking-change footer line. Conventional
+// Commits v1.0.0 defines "BREAKING-CHANGE" (hyphen) as a synonym of
+// "BREAKING CHANGE" (space) — both are legitimate footer tokens, so the
+// separator class [ -] accepts exactly one space OR one hyphen (and nothing
+// else: an underscore like "BREAKING_CHANGE" is NOT a valid synonym and must
+// not match). Case-sensitive by convention.
+var breakingChangeRe = regexp.MustCompile(`(?m)^BREAKING[ -]CHANGE:\s*(.*)$`)
 
 // CategorizeCommits classifies commits into Keep a Changelog categories
 // (§9.2). Merge commits (Subject starting with "Merge ") are excluded
