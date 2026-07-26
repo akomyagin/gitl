@@ -24,7 +24,7 @@
 Ollama (локально/self-hosted), Azure OpenAI, нативный Anthropic (Claude),
 Google Gemini. Без телеметрии.
 
-> **Статус:** выпущен `v0.6.0` — все три команды работают на реальных репозиториях,
+> **Статус:** выпущен `v0.6.1` — все три команды работают на реальных репозиториях,
 > все три формата вывода (`md|text|json`); Action оставляет AI-ревью sticky-комментарием
 > к PR и гейтит по риск-скорингу. Релизные бинари кросс-компилированы, подписаны cosign
 > и покрыты SLSA L3 provenance (верификация — в [VERIFY.md](VERIFY.md)).
@@ -352,7 +352,7 @@ jobs:
         with:
           fetch-depth: 0    # обязательно: без полной истории base..head не резолвится
 
-      - uses: akomyagin/gitl@v0.6.0
+      - uses: akomyagin/gitl@v0.6.1
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, см. ниже
           fail-on: high                               # опционально: блокировать мерж при высоком риске
@@ -398,7 +398,7 @@ jobs:
 плюс ссылка на полный комментарий-ревью, обновляется при каждом запуске:
 
 ```yaml
-      - uses: akomyagin/gitl@v0.6.0
+      - uses: akomyagin/gitl@v0.6.1
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}
           update-pr-description: true
@@ -438,7 +438,7 @@ jobs:
       - uses: https://github.com/actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: https://github.com/akomyagin/gitl@v0.6.0
+      - uses: https://github.com/akomyagin/gitl@v0.6.1
         with:
           gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK; без ключа — offline-режим
 ```
@@ -480,11 +480,11 @@ catalog-компонент:
 ```yaml
 # .gitlab-ci.yml (gitlab.com)
 include:
-  - component: gitlab.com/alkom68/gitl/gitl-review@v0.6.0
+  - component: gitlab.com/alkom68/gitl/gitl-review@v0.6.1
     inputs:
       fail_on: "never"      # по умолчанию; "high" — блокировать рискованные MR
       # max_cost_usd: "0.50"
-      # gitl_version: "v0.6.0"
+      # gitl_version: "v0.6.1"
 ```
 
 На self-hosted-инстансе GitLab `include:component` резолвит компоненты только
@@ -494,7 +494,7 @@ GitHub (inputs работают и с remote-include):
 ```yaml
 # .gitlab-ci.yml (self-hosted GitLab)
 include:
-  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.6.0/templates/gitl-review.yml"
+  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.6.1/templates/gitl-review.yml"
     inputs:
       fail_on: "never"
 ```
@@ -575,7 +575,7 @@ pipelines:
           clone:
             depth: full   # дефолтный клон глубиной 50 может не содержать базовый коммит PR
           script:
-            - pipe: docker://alkom68/gitl-review-pipe:0.6.0
+            - pipe: docker://alkom68/gitl-review-pipe:0.6.1
               variables:
                 GITL_API_KEY: $GITL_API_KEY                    # BYOK; уберите для offline-ревью
                 GITL_BITBUCKET_TOKEN: $GITL_BITBUCKET_TOKEN    # постит комментарий PR
@@ -632,7 +632,7 @@ Pipelines → Repository variables; всегда ссылкой `$VAR`, нико
 ```yaml
 repos:
   - repo: https://github.com/akomyagin/gitl
-    rev: v0.6.0   # pin to a released tag
+    rev: v0.6.1   # pin to a released tag
     hooks:
       - id: gitl-review
 ```
