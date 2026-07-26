@@ -54,9 +54,9 @@ func RiskAtLeast(level, threshold string) bool {
 	return l >= t
 }
 
-// sensitiveKeywords are the security/risk-relevant substrings that push the
-// heuristic toward "high" (§7.3, case-insensitive match against file paths,
-// commit subjects and bodies).
+// sensitiveKeywords are the security/risk-relevant tokens that push the
+// heuristic toward "high" (§7.3, case-insensitive whole-token match against
+// file paths, commit subjects and bodies — see sensitiveHits/tokenizeLower).
 var sensitiveKeywords = []string{
 	"auth", "secret", "password", "token", "credential",
 	"security", "payment", "migration", "permission",
@@ -138,18 +138,43 @@ func sensitiveHits(commits []gitlog.Commit, diff string) []string {
 	// keywords: they commonly contain benign occurrences (e.g. the word
 	// "token" in a comment) that would over-trigger. Paths, subjects and
 	// bodies are the strong signal.
-	lower := strings.ToLower(haystack.String())
+	// Tokenize on any non-alphanumeric byte so keyword matching respects word
+	// boundaries: "auth" must match a standalone token in "auth.go" /
+	// "auth_token" / "auth-service" but NOT the substring in "author",
+	// "authored" or "AUTHORS.md". strings.Contains previously over-matched and
+	// produced spurious HIGH risk for benign changelog/author edits.
+	// Note this is a deliberate tightening: plural forms ("payments",
+	// "migrations", "permissions", "credentials") no longer match the singular
+	// keywords the way they did as substrings.
+	tokens := tokenizeLower(haystack.String())
 
 	seen := map[string]bool{}
 	var hits []string
 	for _, kw := range sensitiveKeywords {
-		if strings.Contains(lower, kw) && !seen[kw] {
+		if tokens[kw] && !seen[kw] {
 			seen[kw] = true
 			hits = append(hits, kw)
 		}
 	}
 	sort.Strings(hits)
 	return hits
+}
+
+// tokenizeLower splits s into lowercase alphanumeric tokens on any
+// non-[a-z0-9] byte (so '.', '_', '-', '/' and whitespace are all separators)
+// and returns them as a set. Used by sensitiveHits for word-boundary keyword
+// matching: a keyword hits only when it equals a whole token, never a
+// substring of one ("auth" ⊄ "author"). Digits stay inside tokens so an
+// identifier like "oauth2" tokenizes whole rather than splitting on the digit.
+func tokenizeLower(s string) map[string]bool {
+	set := make(map[string]bool)
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9'))
+	})
+	for _, f := range fields {
+		set[strings.ToLower(f)] = true
+	}
+	return set
 }
 
 // quoteList renders keywords as a comma-separated, double-quoted list.

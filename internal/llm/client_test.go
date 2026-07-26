@@ -452,3 +452,28 @@ func TestProviderIsFree(t *testing.T) {
 		}
 	}
 }
+
+// TestClientEmptyContentIsError: HTTP 200 with choices[0].message.content == ""
+// must surface as an error, not a "successful" empty review with a heuristic
+// score. Mirrors anthropic/gemini/stream, which already reject empty content —
+// otherwise an OpenAI-compatible proxy (or Ollama) returning an empty delta
+// would silently "pass" a --fail-on=high CI gate.
+func TestClientEmptyContentIsError(t *testing.T) {
+	t.Parallel()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		respondOK(w, "") // 200, valid JSON shape, empty content
+	}))
+	defer srv.Close()
+
+	client, err := NewClient(ClientConfig{Provider: ProviderOpenAI, BaseURL: srv.URL, APIKey: "sk-test"})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, err = client.Complete(context.Background(), Request{User: "hi", Model: "m"})
+	if err == nil {
+		t.Fatal("Complete must error on empty content, got nil")
+	}
+	if !strings.Contains(err.Error(), "empty content") {
+		t.Errorf("error should mention empty content, got: %v", err)
+	}
+}
