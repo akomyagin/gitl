@@ -3,7 +3,9 @@
 //
 // main is intentionally thin: it builds a cancellable context wired to SIGINT/
 // SIGTERM (so Ctrl-C propagates through git exec and the HTTP call, per
-// docs/TECHNICAL_PLAN.md §3.1) and hands off to internal/cli.
+// docs/TECHNICAL_PLAN.md §3.1) and hands off to internal/cli. The process exit
+// code follows the 0/1/2 contract: 0 ok, 1 tool/runtime error, 2 --fail-on
+// risk gate triggered (see cli.ExitCode).
 package main
 
 import (
@@ -19,7 +21,5 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := cli.Execute(ctx, os.Args[1:]); err != nil {
-		os.Exit(1)
-	}
+	os.Exit(cli.ExecuteWithExitCode(ctx, os.Args[1:]))
 }
