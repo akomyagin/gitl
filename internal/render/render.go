@@ -28,6 +28,10 @@ const (
 	FormatJSON     Format = "json"
 )
 
+// FormatNames is the canonical --format value set, in help-text order
+// (md | text | json). Used for shell completion of the enum-valued flag.
+var FormatNames = []string{string(FormatMarkdown), string(FormatText), string(FormatJSON)}
+
 // SchemaVersion is the JSON output schema version (§7.4). Bumped only on a
 // breaking change (renaming/removing a field or changing a type); adding an
 // optional field does not change it.

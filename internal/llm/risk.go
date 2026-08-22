@@ -28,6 +28,11 @@ var riskOrder = map[string]int{
 	RiskHigh:   3,
 }
 
+// FailOnValues is the canonical --fail-on value set, sentinel first to match
+// the flag's help-text ordering (never | low | medium | high). Used for shell
+// completion; ValidFailOnLevel/riskOrder remain the validation source.
+var FailOnValues = []string{"never", RiskLow, RiskMedium, RiskHigh}
+
 // ValidRiskLevel reports whether level is one of low|medium|high.
 func ValidRiskLevel(level string) bool {
 	switch level {

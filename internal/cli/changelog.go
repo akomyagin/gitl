@@ -54,6 +54,7 @@ func newChangelogCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().Bool("dry-run", false, "print a cost estimate and exit without calling the API; only used with --ai")
 	cmd.Flags().Bool("no-cache", false, "skip LLM response cache (always call the API); only used with --ai")
 
+	registerEnumCompletions(cmd)
 	return cmd
 }
 
