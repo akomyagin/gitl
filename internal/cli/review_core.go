@@ -107,8 +107,7 @@ func prepareReview(cfg *config.Config, src diffSource, opts ReviewOptions) (*rev
 	// message embeds the full diff — so staged mode is content-addressed by the
 	// staged diff itself (no range exists to key on): re-running with the same
 	// index hits the cache, any `git add` changes the diff and therefore the key.
-	useCache := cfg.Cache.Enabled && !opts.NoCache && !cfg.OfflineMode() && cfg.Cache.TTLHours > 0
-	if useCache {
+	if useCache(cfg, opts.NoCache) {
 		plan.cache = llmcache.Open(llmcache.Options{
 			TTL:           time.Duration(cfg.Cache.TTLHours) * time.Hour,
 			RemoteURL:     cfg.Cache.Remote.URL,
@@ -118,6 +117,39 @@ func prepareReview(cfg *config.Config, src diffSource, opts ReviewOptions) (*rev
 		plan.cacheKey = llmCacheKey(cfg, system, user)
 	}
 	return plan, nil
+}
+
+// useCache is the single predicate deciding whether the LLM response cache is
+// active for this run. Shared by prepareReview (which wires plan.cache from
+// it) and cacheTier (which reports the topology in the JSON run metadata), so
+// the reported tier can never disagree with what prepareReview actually did.
+func useCache(cfg *config.Config, noCache bool) bool {
+	return cfg.Cache.Enabled && !noCache && !cfg.OfflineMode() && cfg.Cache.TTLHours > 0
+}
+
+// cacheTier reports the cache topology in effect for this run, for the JSON
+// cache.tier metadata: "none" (cache disabled — offline mode, --no-cache,
+// cache.enabled: false, or ttl_hours <= 0), "local" (disk-only), or "tiered"
+// (disk + remote HTTP KV). It is the configured MODE, not the backend that
+// served a particular hit; it only ever emits these three literals, never a
+// URL or token.
+func cacheTier(cfg *config.Config, noCache bool) string {
+	if !useCache(cfg, noCache) {
+		return "none"
+	}
+	if cfg.Cache.Remote.URL != "" {
+		return "tiered"
+	}
+	return "local"
+}
+
+// stampRunMeta sets the additive run-metadata fields (duration_ms + cache) on
+// a freshly built artifact. Single source of truth so the CLI and core paths
+// cannot diverge on how the metadata is stamped.
+func stampRunMeta(art *render.Artifact, start time.Time, hit bool, tier string) {
+	art.DurationMS = time.Since(start).Milliseconds()
+	art.Cache.Hit = hit
+	art.Cache.Tier = tier
 }
 
 // remoteCacheToken resolves the optional remote-cache bearer token from the
@@ -224,11 +256,14 @@ func (p *reviewPlan) complete(ctx context.Context, provider llm.Provider) (rende
 // an estimate, produces no artifact), terminal token streaming, rendering, and
 // the --fail-on exit-code gate.
 func RunReviewCore(ctx context.Context, cfg *config.Config, src diffSource, opts ReviewOptions) (render.Artifact, error) {
+	start := time.Now()
 	plan, err := prepareReview(cfg, src, opts)
 	if err != nil {
 		return render.Artifact{}, err
 	}
+	tier := cacheTier(cfg, opts.NoCache)
 	if art, ok := plan.lookupCache(); ok {
+		stampRunMeta(&art, start, true, tier)
 		return art, nil
 	}
 	// Cost guard runs automatically before calling the provider (§8.4), skipped
@@ -247,6 +282,7 @@ func RunReviewCore(ctx context.Context, cfg *config.Config, src diffSource, opts
 		return render.Artifact{}, err
 	}
 	plan.storeCache(resp)
+	stampRunMeta(&art, start, false, tier)
 	return art, nil
 }
 

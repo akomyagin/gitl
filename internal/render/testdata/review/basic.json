@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-07-05T18:32:10Z",
+  "range": "HEAD~5..HEAD",
+  "offline": false,
+  "provider": "openai",
+  "model": "gpt-4o-mini",
+  "duration_ms": 1234,
+  "cache": {
+    "hit": true,
+    "tier": "tiered"
+  },
+  "risk": {
+    "level": "medium",
+    "summary": "Touches auth middleware without new tests.",
+    "heuristic": false
+  },
+  "stats": {
+    "commits": 5,
+    "files_changed": 12,
+    "lines_added": 340,
+    "lines_removed": 58
+  },
+  "commits": [
+    {
+      "hash": "abcd123",
+      "author": "Jane Doe",
+      "date": "2026-07-01T10:00:00Z",
+      "subject": "feat: add token refresh"
+    }
+  ],
+  "review_markdown": "## Summary\n\nDoes things.\n\n## Concerns\n\n- `auth.go` risky."
+}

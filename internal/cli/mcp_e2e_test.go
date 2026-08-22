@@ -563,6 +563,16 @@ func TestMCPE2EReviewOfflineRange(t *testing.T) {
 	if body, _ := m["review_markdown"].(string); body == "" {
 		t.Error("review_markdown is empty, want the offline review body")
 	}
+	// Run metadata (U8): stamped by RunReviewCore, so the MCP wire JSON gains
+	// duration_ms + cache with no mcp.go change. Offline: no cache, no hit.
+	if dur, ok := m["duration_ms"].(float64); !ok || dur < 0 {
+		t.Errorf("duration_ms = %v, want a number >= 0", m["duration_ms"])
+	}
+	if cache, ok := m["cache"].(map[string]any); !ok {
+		t.Errorf("cache missing or not an object: %v", m["cache"])
+	} else if cache["hit"] != false || cache["tier"] != "none" {
+		t.Errorf("cache = %v, want {hit: false, tier: %q} in offline mode", cache, "none")
+	}
 
 	stderr := s.closeAndWait()
 	// The offline notice must arrive on stderr; stdout purity is enforced by

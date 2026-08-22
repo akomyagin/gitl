@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -610,6 +611,101 @@ func (b *syncBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.buf.String()
+}
+
+// reviewJSONRunMeta unmarshals a review JSON output and returns the run
+// metadata (duration_ms + cache), failing the test on a malformed document.
+func reviewJSONRunMeta(t *testing.T, out string) (durationMS float64, hit bool, tier string) {
+	t.Helper()
+	var m map[string]any
+	if err := json.Unmarshal([]byte(out), &m); err != nil {
+		t.Fatalf("review output is not valid JSON: %v\n%s", err, out)
+	}
+	dur, ok := m["duration_ms"].(float64)
+	if !ok {
+		t.Fatalf("duration_ms missing or not a number: %v", m["duration_ms"])
+	}
+	cache, ok := m["cache"].(map[string]any)
+	if !ok {
+		t.Fatalf("cache missing or not an object: %v", m["cache"])
+	}
+	h, ok := cache["hit"].(bool)
+	if !ok {
+		t.Fatalf("cache.hit missing or not a bool: %v", cache["hit"])
+	}
+	tr, ok := cache["tier"].(string)
+	if !ok {
+		t.Fatalf("cache.tier missing or not a string: %v", cache["tier"])
+	}
+	// Secret hygiene: tier must be one of the three documented literals —
+	// never a URL or a token.
+	switch tr {
+	case "none", "local", "tiered":
+	default:
+		t.Fatalf("cache.tier = %q, must be one of none|local|tiered", tr)
+	}
+	if got := m["schema_version"]; got != float64(1) {
+		t.Errorf("schema_version = %v, want 1 (run metadata is additive)", got)
+	}
+	return dur, h, tr
+}
+
+// TestReviewJSONRunMetadataFreshThenWarmCacheDryRun is the CLI end-to-end pass
+// for the U8 run metadata: a fresh buffered network review reports
+// cache.hit=false / tier="local" (cache enabled by default, no remote), and a
+// second run under --dry-run hits the warm cache — the documented pre-existing
+// interaction where a warm cache renders even under --dry-run — reporting
+// cache.hit=true. duration_ms is a non-negative number on both.
+func TestReviewJSONRunMetadataFreshThenWarmCacheDryRun(t *testing.T) {
+	const reviewBody = "fresh review body for run metadata"
+	llmSrv := httptest.NewServer(&oneShotJSONHandler{
+		content: reviewBody + "\n```risk\n{\"level\":\"low\",\"summary\":\"ok\"}\n```",
+	})
+	t.Cleanup(llmSrv.Close)
+
+	dir := setupRepo(t, false)
+	t.Setenv("XDG_CACHE_HOME", t.TempDir()) // hermetic disk cache shared by both runs
+	riskHistoryTestDir(t)                   // hermetic risk history (XDG_DATA_HOME)
+	env := map[string]string{"GITL_API_KEY": "sk-fake-run-meta"}
+
+	// Run 1: fresh call — a miss that populates the cache.
+	out, err := runReviewInDir(t, dir, env, "HEAD~1..HEAD",
+		"--base-url", llmSrv.URL, "--no-stream", "--format=json")
+	if err != nil {
+		t.Fatalf("fresh review: %v", err)
+	}
+	dur, hit, tier := reviewJSONRunMeta(t, out)
+	if hit {
+		t.Error("fresh run: cache.hit = true, want false")
+	}
+	if tier != "local" {
+		t.Errorf("fresh run: cache.tier = %q, want %q (default disk-only cache)", tier, "local")
+	}
+	if dur < 0 {
+		t.Errorf("fresh run: duration_ms = %v, want >= 0", dur)
+	}
+
+	// Run 2: --dry-run over the now-warm cache. The cache is checked BEFORE
+	// the dry-run gate (historical order), so the cached review renders and
+	// its metadata must say so.
+	out, err = runReviewInDir(t, dir, env, "HEAD~1..HEAD",
+		"--base-url", llmSrv.URL, "--no-stream", "--format=json", "--dry-run")
+	if err != nil {
+		t.Fatalf("dry-run over warm cache: %v", err)
+	}
+	if !strings.Contains(out, reviewBody) {
+		t.Fatalf("warm-cache dry-run did not render the cached review:\n%s", out)
+	}
+	dur, hit, tier = reviewJSONRunMeta(t, out)
+	if !hit {
+		t.Error("warm-cache run: cache.hit = false, want true")
+	}
+	if tier != "local" {
+		t.Errorf("warm-cache run: cache.tier = %q, want %q", tier, "local")
+	}
+	if dur < 0 {
+		t.Errorf("warm-cache run: duration_ms = %v, want >= 0", dur)
+	}
 }
 
 // TestBufferedReviewRendersBeforeCacheStore is the regression test for the

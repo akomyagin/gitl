@@ -53,6 +53,20 @@ type Artifact struct {
 	// ReviewMarkdown is the model's review body with the trailing risk block
 	// already stripped.
 	ReviewMarkdown string
+	// DurationMS is the wall-clock of the review run, in milliseconds. Stamped
+	// by the entry points (RunReviewCore / the CLI runReview), not by the
+	// artifact builder.
+	DurationMS int64
+	// Cache is the run's cache metadata (hit + configured tier). Stamped
+	// alongside DurationMS.
+	Cache CacheMeta
+}
+
+// CacheMeta is the run's cache metadata: whether the review was served from
+// the LLM response cache, and which cache topology was in effect.
+type CacheMeta struct {
+	Hit  bool
+	Tier string // "none" | "local" | "tiered"
 }
 
 // Stats are the aggregate diff counts for a review.
@@ -225,17 +239,31 @@ func stripMarkdown(s string) string {
 
 // jsonArtifact is the wire shape of the JSON output (§7.4). Field names are a
 // documented external contract — do not rename without bumping SchemaVersion.
+// duration_ms and cache are purely ADDITIVE run-metadata fields: consumers
+// that predate them see the same document plus two new keys, so SchemaVersion
+// stays 1 (additive fields do not bump the schema — same rule as the digest
+// risk_trend addition).
 type jsonArtifact struct {
-	SchemaVersion int          `json:"schema_version"`
-	GeneratedAt   string       `json:"generated_at"`
-	Range         string       `json:"range"`
-	Offline       bool         `json:"offline"`
-	Provider      string       `json:"provider"`
-	Model         string       `json:"model"`
-	Risk          jsonRisk     `json:"risk"`
-	Stats         jsonStats    `json:"stats"`
-	Commits       []jsonCommit `json:"commits"`
-	ReviewMD      string       `json:"review_markdown"`
+	SchemaVersion int           `json:"schema_version"`
+	GeneratedAt   string        `json:"generated_at"`
+	Range         string        `json:"range"`
+	Offline       bool          `json:"offline"`
+	Provider      string        `json:"provider"`
+	Model         string        `json:"model"`
+	DurationMS    int64         `json:"duration_ms"`
+	Cache         jsonCacheMeta `json:"cache"`
+	Risk          jsonRisk      `json:"risk"`
+	Stats         jsonStats     `json:"stats"`
+	Commits       []jsonCommit  `json:"commits"`
+	ReviewMD      string        `json:"review_markdown"`
+}
+
+// jsonCacheMeta is deliberately NOT omitempty: the object is always present so
+// consumers can unconditionally read cache.hit / cache.tier. tier "none" +
+// hit false is the honest representation of an uncached run.
+type jsonCacheMeta struct {
+	Hit  bool   `json:"hit"`
+	Tier string `json:"tier"`
 }
 
 type jsonRisk struct {
@@ -278,6 +306,8 @@ func renderJSON(w io.Writer, art Artifact) error {
 		Offline:       art.Offline,
 		Provider:      art.Provider,
 		Model:         art.Model,
+		DurationMS:    art.DurationMS,
+		Cache:         jsonCacheMeta{Hit: art.Cache.Hit, Tier: art.Cache.Tier},
 		Risk:          jsonRisk{Level: art.RiskLevel, Summary: art.RiskSummary, Heuristic: art.RiskHeuristic},
 		Stats: jsonStats{
 			Commits:      art.Stats.Commits,

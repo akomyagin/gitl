@@ -143,6 +143,92 @@ func TestRenderJSONSchema(t *testing.T) {
 	}
 }
 
+// TestRenderJSONRunMetadata: the additive run-metadata fields (duration_ms +
+// cache) are always present in the JSON output with the documented names and
+// JSON types, and adding them did NOT bump schema_version (they are additive —
+// same rule as the digest risk_trend addition).
+func TestRenderJSONRunMetadata(t *testing.T) {
+	art := sampleArtifact()
+	art.DurationMS = 1234
+	art.Cache = CacheMeta{Hit: true, Tier: "local"}
+
+	var b strings.Builder
+	if err := Render(&b, art, FormatJSON); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(b.String()), &m); err != nil {
+		t.Fatalf("output is not valid JSON: %v\n%s", err, b.String())
+	}
+
+	// Additive fields must NOT bump the schema version.
+	if got := m["schema_version"]; got != float64(1) {
+		t.Errorf("schema_version = %v, want 1 (additive fields must not bump it)", got)
+	}
+
+	dur, ok := m["duration_ms"].(float64)
+	if !ok {
+		t.Fatalf("duration_ms missing or not a number: %v", m["duration_ms"])
+	}
+	if dur != 1234 {
+		t.Errorf("duration_ms = %v, want 1234", dur)
+	}
+
+	cache, ok := m["cache"].(map[string]any)
+	if !ok {
+		t.Fatalf("cache missing or not an object: %v", m["cache"])
+	}
+	if hit, ok := cache["hit"].(bool); !ok || !hit {
+		t.Errorf("cache.hit = %v, want true (bool)", cache["hit"])
+	}
+	if tier, ok := cache["tier"].(string); !ok || tier != "local" {
+		t.Errorf("cache.tier = %v, want %q (string)", cache["tier"], "local")
+	}
+}
+
+// TestRenderJSONRunMetadataZeroValues: duration_ms and cache are deliberately
+// NOT omitempty — a zero duration (fast cache hit) and an uncached run must
+// still emit the keys so consumers can read them unconditionally.
+func TestRenderJSONRunMetadataZeroValues(t *testing.T) {
+	art := sampleArtifact()
+	art.DurationMS = 0
+	art.Cache = CacheMeta{Hit: false, Tier: "none"}
+
+	var b strings.Builder
+	if err := Render(&b, art, FormatJSON); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(b.String()), &m); err != nil {
+		t.Fatalf("output is not valid JSON: %v", err)
+	}
+	if got, ok := m["duration_ms"].(float64); !ok || got != 0 {
+		t.Errorf("duration_ms = %v, want present and 0", m["duration_ms"])
+	}
+	cache, ok := m["cache"].(map[string]any)
+	if !ok {
+		t.Fatalf("cache missing or not an object: %v", m["cache"])
+	}
+	if cache["hit"] != false || cache["tier"] != "none" {
+		t.Errorf("cache = %v, want {hit: false, tier: %q}", cache, "none")
+	}
+}
+
+// TestReviewJSONGolden pins the exact serialized shape of the review JSON
+// contract — including the additive duration_ms and cache keys — byte-for-byte
+// (run `go test ./internal/render/... -update` to regenerate).
+func TestReviewJSONGolden(t *testing.T) {
+	art := sampleArtifact()
+	art.DurationMS = 1234
+	art.Cache = CacheMeta{Hit: true, Tier: "tiered"}
+
+	var b strings.Builder
+	if err := Render(&b, art, FormatJSON); err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	assertGolden(t, "testdata/review/basic.json", []byte(b.String()))
+}
+
 func TestRenderUnknownFormat(t *testing.T) {
 	var b strings.Builder
 	if err := Render(&b, sampleArtifact(), Format("xml")); err == nil {
