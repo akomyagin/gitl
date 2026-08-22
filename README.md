@@ -6,7 +6,7 @@
 repository's git history and turns it into a structured engineering artifact via LLM:
 
 - **`gitl review <range>`** — AI review of a commit range / PR with machine-readable
-  risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → non-zero exit code);
+  risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → exit code 2);
   streams tokens to the terminal in real time; on-disk LLM response cache with an
   optional shared remote cache for CI;
   custom system-prompt templates; `--staged` reviews staged (uncommitted) changes
@@ -51,7 +51,9 @@ go run ./cmd/gitl review pr/42
 
 # machine-readable output for CI + risk gating
 go run ./cmd/gitl review HEAD~5..HEAD --format=json
-go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # non-zero exit on high risk
+go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # exit code 2 on high risk
+# exit codes: 0 = ok (risk below --fail-on), 1 = tool/runtime error (git/LLM/
+# config failure), 2 = the --fail-on risk gate triggered — CI can branch on 2
 
 # estimate cost without making an API call
 go run ./cmd/gitl review HEAD~5..HEAD --dry-run
@@ -361,7 +363,9 @@ Security best practices:
   `pull_request` event, but a shallow clone won't resolve `base.sha..head.sha`.
 - **`fail-on` defaults to `never`.** The Action only comments; it does not block merges
   unless you opt in explicitly (`fail-on: high`, etc.) — same "WARN by default, hard gate
-  is explicit opt-in" principle as the CLI (`--fail-on`).
+  is explicit opt-in" principle as the CLI (`--fail-on`). When the gate does trigger, the
+  job fails with gitl's exit code `2` (risk gate) — a genuine tool error fails with `1`,
+  so downstream steps can tell "risky change" from "gitl broke".
 - **Diff privacy.** In CI, the diff is sent to whichever LLM provider is configured
   (default: OpenAI-compatible API). For private code, use a self-hosted/enterprise provider
   (Ollama, Azure OpenAI) — see Providers above.

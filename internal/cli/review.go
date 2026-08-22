@@ -67,7 +67,8 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 			"Without an API key (GITL_API_KEY or llm.api_key) it falls back to a\n" +
 			"deterministic offline review and prints a warning to stderr.\n\n" +
 			"--dry-run prints a cost estimate and exits without calling the API.\n" +
-			"--fail-on gates CI: exit non-zero when the risk level meets the threshold.",
+			"--fail-on gates CI: exits 2 when the risk level meets the threshold\n" +
+			"(exit 1 is reserved for tool/runtime errors, unrelated to the verdict).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			staged, err := cmd.Flags().GetBool("staged")
@@ -92,7 +93,7 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().String("model", "", "model name")
 	cmd.Flags().String("base-url", "", "LLM API base URL")
 	cmd.Flags().String("format", "", "output format (md | text | json)")
-	cmd.Flags().String("fail-on", "", "exit non-zero when risk meets threshold (never | low | medium | high)")
+	cmd.Flags().String("fail-on", "", "exit 2 when risk meets threshold (never | low | medium | high)")
 	cmd.Flags().Float64("max-cost-usd", 0, "block the request if the estimated cost exceeds this (<=0 disables the guard)")
 	cmd.Flags().Bool("dry-run", false, "print a cost estimate and exit without calling the API")
 	cmd.Flags().Bool("no-cache", false, "skip LLM response cache (always call the API)")

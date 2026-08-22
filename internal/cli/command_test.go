@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -160,6 +161,91 @@ func TestReviewFailOnHighExitsNonZero(t *testing.T) {
 	if !strings.Contains(out, "**Risk:** HIGH") {
 		t.Errorf("review not printed before failing:\n%s", out)
 	}
+}
+
+// TestExitCode is the unit table test for the error → process exit code
+// mapping (0 ok, 1 tool error, 2 --fail-on gate). The wrapped-failError case
+// is load-bearing: it forces the implementation to use errors.As, not a bare
+// type assertion — a future refactor that wraps the gate error must still
+// exit 2.
+func TestExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{"nil is ok", nil, 0},
+		{"plain error is tool failure", errors.New("boom"), 1},
+		{"wrapped tool error", fmt.Errorf("git: %w", errors.New("bad range")), 1},
+		{"failError is gate", &failError{level: "high", threshold: "high"}, 2},
+		{"wrapped failError still gate", fmt.Errorf("x: %w", &failError{level: "high", threshold: "medium"}), 2},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExitCode(tt.err); got != tt.want {
+				t.Errorf("ExitCode(%v) = %d, want %d", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
+// runReviewExitCode mirrors runReviewInDir but returns the process exit code
+// instead of the raw error, going through the same ExitCode mapping that main
+// uses via ExecuteWithExitCode.
+func runReviewExitCode(t *testing.T, dir string, env map[string]string, args ...string) (string, int) {
+	t.Helper()
+	out, err := runReviewInDir(t, dir, env, args...)
+	return out, ExitCode(err)
+}
+
+// TestReviewExitCodesEndToEnd drives the real review path and asserts the
+// 0/1/2 process exit-code contract: 2 only for the --fail-on risk gate, 1 for
+// genuine tool errors (bad range, invalid flag value), 0 otherwise.
+func TestReviewExitCodesEndToEnd(t *testing.T) {
+	env := map[string]string{"GITL_API_KEY": ""}
+
+	t.Run("gate triggered exits 2 and still prints review", func(t *testing.T) {
+		dir := setupRepo(t, true) // sensitive path → heuristic "high"
+		out, code := runReviewExitCode(t, dir, env, "HEAD~1..HEAD", "--fail-on=high")
+		if code != ExitGate {
+			t.Errorf("exit code = %d, want %d (gate)", code, ExitGate)
+		}
+		if !strings.Contains(out, "**Risk:** HIGH") {
+			t.Errorf("review not printed before failing:\n%s", out)
+		}
+	})
+
+	t.Run("fail-on=never exits 0", func(t *testing.T) {
+		dir := setupRepo(t, true)
+		_, code := runReviewExitCode(t, dir, env, "HEAD~1..HEAD", "--fail-on=never")
+		if code != ExitOK {
+			t.Errorf("exit code = %d, want %d", code, ExitOK)
+		}
+	})
+
+	t.Run("risk below threshold exits 0", func(t *testing.T) {
+		dir := setupRepo(t, false) // non-sensitive → risk below "high"
+		_, code := runReviewExitCode(t, dir, env, "HEAD~1..HEAD", "--fail-on=high")
+		if code != ExitOK {
+			t.Errorf("exit code = %d, want %d", code, ExitOK)
+		}
+	})
+
+	t.Run("bad revision range exits 1 not 2", func(t *testing.T) {
+		dir := setupRepo(t, true)
+		_, code := runReviewExitCode(t, dir, env, "nope..nope", "--fail-on=high")
+		if code != ExitToolErr {
+			t.Errorf("exit code = %d, want %d (tool error, not gate)", code, ExitToolErr)
+		}
+	})
+
+	t.Run("invalid fail-on value exits 1", func(t *testing.T) {
+		dir := setupRepo(t, true)
+		_, code := runReviewExitCode(t, dir, env, "HEAD~1..HEAD", "--fail-on=bogus")
+		if code != ExitToolErr {
+			t.Errorf("exit code = %d, want %d (config validation error)", code, ExitToolErr)
+		}
+	})
 }
 
 func TestReviewFailOnNeverPasses(t *testing.T) {

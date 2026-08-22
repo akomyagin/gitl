@@ -7,6 +7,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,6 +54,15 @@ func newRootCmd() *cobra.Command {
 	return root
 }
 
+// Exit codes for the gitl process (ROADMAP F3):
+//
+//	0 ok, 1 tool/runtime error, 2 --fail-on gate triggered.
+const (
+	ExitOK      = 0
+	ExitToolErr = 1
+	ExitGate    = 2
+)
+
 // Execute runs the gitl command tree with the given context and args. It
 // returns a non-nil error to signal a non-zero exit code; the error is printed
 // to stderr here so main stays thin.
@@ -64,6 +74,28 @@ func Execute(ctx context.Context, args []string) error {
 		return err
 	}
 	return nil
+}
+
+// ExitCode maps a top-level command error to the process exit code. A
+// *failError (the --fail-on risk gate, review.go) means the tool ran correctly
+// but the review's own risk verdict tripped the gate — a distinct signal from a
+// genuine tool/runtime failure, so CI can tell "risky change" from "gitl broke".
+func ExitCode(err error) int {
+	if err == nil {
+		return ExitOK
+	}
+	var fe *failError
+	if errors.As(err, &fe) {
+		return ExitGate
+	}
+	return ExitToolErr
+}
+
+// ExecuteWithExitCode runs the command tree and returns the process exit code
+// (0/1/2) instead of a bare error, so main stays a one-liner. stderr printing
+// still happens inside Execute.
+func ExecuteWithExitCode(ctx context.Context, args []string) int {
+	return ExitCode(Execute(ctx, args))
 }
 
 // setupLogging configures the default slog logger. --verbose raises the level
