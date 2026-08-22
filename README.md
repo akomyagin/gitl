@@ -196,6 +196,24 @@ output:
 
 Disable per-call: `gitl review HEAD~5..HEAD --no-stream`
 
+### Color (`output.color`)
+
+On an interactive terminal, `gitl review` colorizes the risk level in the
+header (`HIGH` red, `MEDIUM` yellow, `LOW` green). Color switches off
+automatically when stdout is not a TTY (pipes, CI logs) and never appears in
+`--format=json` output. Precedence, highest first:
+
+1. `NO_COLOR` environment variable set (any value, even empty) — color off
+   ([no-color.org](https://no-color.org));
+2. `output.color: false` in config (or `GITL_OUTPUT_COLOR=false`) — color off;
+3. stdout is not a TTY — color off;
+4. otherwise — color on.
+
+```yaml
+output:
+  color: true   # default; set false to disable ANSI color
+```
+
 ### LLM response cache (`cache`)
 
 `gitl review` caches model responses on disk (SHA-256 of provider + model + prompt).

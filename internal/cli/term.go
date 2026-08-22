@@ -16,6 +16,31 @@ func isTerminal(w io.Writer) bool {
 	return ok && term.IsTerminal(int(f.Fd()))
 }
 
+// isTerminalFn is the TTY probe consulted by wantColor. A package var so tests
+// can stub the TTY-true branch deterministically without allocating a real PTY
+// (the same isolation idea as gitlog.Runner wrapping os/exec).
+var isTerminalFn = isTerminal
+
+// wantColor reports whether ANSI color should be emitted for human-readable
+// review output written to w. Precedence (highest first, first match wins):
+//
+//  1. NO_COLOR env var present (any value, even empty) → false (https://no-color.org)
+//  2. cfg.Output.Color == false                        → false
+//  3. w is not a TTY                                   → false
+//  4. otherwise                                        → true
+//
+// Only consulted on the md/text/streaming header paths; JSON output never
+// carries color (renderJSON takes no color parameter by construction).
+func wantColor(w io.Writer, cfg *config.Config) bool {
+	if _, ok := os.LookupEnv("NO_COLOR"); ok {
+		return false
+	}
+	if !cfg.Output.Color {
+		return false
+	}
+	return isTerminalFn(w)
+}
+
 // wantStream reports whether the streaming path should be used for this review:
 // terminal stdout, md/text format, not --no-stream, not --dry-run, not offline,
 // no custom output.template_file.

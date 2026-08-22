@@ -71,13 +71,22 @@ type Commit struct {
 	Subject string
 }
 
-// Render writes the artifact in the requested format to w.
+// Render writes the artifact in the requested format to w, without color.
 func Render(w io.Writer, art Artifact, format Format) error {
+	return RenderColor(w, art, format, false)
+}
+
+// RenderColor behaves like Render, additionally wrapping the risk level token
+// of the md/text header in ANSI color when color is true. JSON is never
+// colored: renderJSON emits the risk fields structurally and takes no color
+// parameter, keeping the machine contract free of escape bytes by
+// construction.
+func RenderColor(w io.Writer, art Artifact, format Format, color bool) error {
 	switch format {
 	case FormatMarkdown, "":
-		return renderMarkdown(w, art)
+		return renderMarkdown(w, art, color)
 	case FormatText:
-		return renderText(w, art)
+		return renderText(w, art, color)
 	case FormatJSON:
 		return renderJSON(w, art)
 	default:
@@ -102,14 +111,21 @@ func TemplateFuncs() template.FuncMap { return tmplFuncs }
 // outputTemplateFile is ignored (a warning is logged via slog.Warn when a path
 // was set, since it has no effect on those formats).
 func RenderWithTemplate(w io.Writer, art Artifact, format Format, outputTemplateFile string) error {
+	return RenderWithTemplateColor(w, art, format, outputTemplateFile, false)
+}
+
+// RenderWithTemplateColor behaves like RenderWithTemplate, additionally
+// colorizing the built-in risk header when color is true (see RenderColor).
+// Custom-template output is never colorized — the user owns the template.
+func RenderWithTemplateColor(w io.Writer, art Artifact, format Format, outputTemplateFile string, color bool) error {
 	if format != FormatMarkdown && format != "" {
 		if outputTemplateFile != "" {
 			slog.Warn("output.template_file is ignored for non-markdown format", "format", string(format))
 		}
-		return Render(w, art, format)
+		return RenderColor(w, art, format, color)
 	}
 	if outputTemplateFile == "" {
-		return Render(w, art, format)
+		return RenderColor(w, art, format, color)
 	}
 	name := filepath.Base(outputTemplateFile)
 	tmpl, err := template.New(name).Funcs(tmplFuncs).ParseFiles(outputTemplateFile)
@@ -150,21 +166,20 @@ func riskHeader(art Artifact) string {
 }
 
 // RiskHeaderLine returns the formatted risk header line for the given risk
-// fields. Used by the streaming path, which renders the header after [DONE]
-// rather than through the full Artifact renderer.
+// fields, without color. Used by the streaming path, which renders the header
+// after [DONE] rather than through the full Artifact renderer.
 func RiskHeaderLine(level, summary string, heuristic bool) string {
-	return sanitizeTerminal(riskHeader(Artifact{
-		RiskLevel:     level,
-		RiskSummary:   summary,
-		RiskHeuristic: heuristic,
-	}))
+	return RiskHeaderLineColored(level, summary, heuristic, false)
 }
 
-// renderMarkdown prepends the risk header to the review body.
-func renderMarkdown(w io.Writer, art Artifact) error {
+// renderMarkdown prepends the risk header to the review body. Header and body
+// are sanitized separately (equivalent to sanitizing the concatenation, since
+// they are joined by our own "\n\n") so that ANSI color — applied strictly
+// after sanitize — can wrap the level token in the header only, never the body.
+func renderMarkdown(w io.Writer, art Artifact, color bool) error {
 	body := strings.TrimRight(art.ReviewMarkdown, "\n")
-	out := riskHeader(art) + "\n\n" + body + "\n"
-	if _, err := io.WriteString(w, sanitizeTerminal(out)); err != nil {
+	out := riskHeaderColored(art, color) + "\n\n" + sanitizeTerminal(body+"\n")
+	if _, err := io.WriteString(w, out); err != nil {
 		return fmt.Errorf("render markdown: %w", err)
 	}
 	return nil
@@ -172,10 +187,16 @@ func renderMarkdown(w io.Writer, art Artifact) error {
 
 // renderText emits the Markdown content with #/**/backtick markup crudely
 // stripped. No real Markdown parser (§7.4) — this is intentionally rough.
-func renderText(w io.Writer, art Artifact) error {
+// Same header/body split as renderMarkdown; the header keeps the pre-color
+// pipeline order (stripMarkdown, then sanitize) with color applied last.
+func renderText(w io.Writer, art Artifact, color bool) error {
 	body := strings.TrimRight(art.ReviewMarkdown, "\n")
-	combined := riskHeader(art) + "\n\n" + body
-	if _, err := io.WriteString(w, sanitizeTerminal(stripMarkdown(combined)+"\n")); err != nil {
+	header := sanitizeTerminal(stripMarkdown(riskHeader(art)))
+	if color {
+		header = colorizeLevel(header, art.RiskLevel)
+	}
+	out := header + "\n\n" + sanitizeTerminal(stripMarkdown(body)+"\n")
+	if _, err := io.WriteString(w, out); err != nil {
 		return fmt.Errorf("render text: %w", err)
 	}
 	return nil

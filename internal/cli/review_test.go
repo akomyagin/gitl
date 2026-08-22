@@ -414,6 +414,67 @@ func TestReviewWritesRiskHistory(t *testing.T) {
 	}
 }
 
+// unsetNoColor guarantees NO_COLOR is unset for the test (with restore), so a
+// developer machine or CI with NO_COLOR exported cannot skew color tests.
+func unsetNoColor(t *testing.T) {
+	t.Helper()
+	t.Setenv("NO_COLOR", "sentinel") // registers restore of the original value
+	if err := os.Unsetenv("NO_COLOR"); err != nil {
+		t.Fatalf("unset NO_COLOR: %v", err)
+	}
+}
+
+// TestReviewJSONNeverColored: --format=json emits no ANSI even when every
+// color condition is forced on (stubbed TTY + default output.color:true) —
+// the machine contract stays escape-free.
+func TestReviewJSONNeverColored(t *testing.T) {
+	riskHistoryTestDir(t)
+	dir := setupRepo(t, false)
+	stubTerminal(t, true)
+	unsetNoColor(t)
+
+	out, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "HEAD~1..HEAD", "--format=json")
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if strings.ContainsRune(out, 0x1b) {
+		t.Errorf("json review output contains a raw ESC byte:\n%q", out)
+	}
+}
+
+// TestReviewMarkdownColoredOnTTY: end-to-end wiring check — with a (stubbed)
+// TTY, default output.color:true and NO_COLOR unset, the buffered offline
+// review colorizes the risk level token.
+func TestReviewMarkdownColoredOnTTY(t *testing.T) {
+	riskHistoryTestDir(t)
+	dir := setupRepo(t, false)
+	stubTerminal(t, true)
+	unsetNoColor(t)
+
+	out, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": ""}, "HEAD~1..HEAD")
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if !strings.Contains(out, "\x1b[") {
+		t.Errorf("expected a colored risk level on a TTY, got no ANSI:\n%q", out)
+	}
+}
+
+// TestReviewMarkdownNoColorEnv: NO_COLOR beats a TTY and output.color:true.
+func TestReviewMarkdownNoColorEnv(t *testing.T) {
+	riskHistoryTestDir(t)
+	dir := setupRepo(t, false)
+	stubTerminal(t, true)
+
+	out, err := runReviewInDir(t, dir, map[string]string{"GITL_API_KEY": "", "NO_COLOR": "1"}, "HEAD~1..HEAD")
+	if err != nil {
+		t.Fatalf("review: %v", err)
+	}
+	if strings.ContainsRune(out, 0x1b) {
+		t.Errorf("NO_COLOR must suppress ANSI:\n%q", out)
+	}
+}
+
 // TestReviewDryRunWritesNoRiskHistory: --dry-run returns before any provider
 // call — no risk outcome exists, so nothing may be logged.
 func TestReviewDryRunWritesNoRiskHistory(t *testing.T) {

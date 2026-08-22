@@ -220,7 +220,7 @@ func TestReviewMDTmplMatchesRenderMarkdown(t *testing.T) {
 		art := sampleArtifact()
 		art.RiskHeuristic = heuristic
 		var want strings.Builder
-		if err := renderMarkdown(&want, art); err != nil {
+		if err := renderMarkdown(&want, art, false); err != nil {
 			t.Fatalf("renderMarkdown: %v", err)
 		}
 		var got strings.Builder
