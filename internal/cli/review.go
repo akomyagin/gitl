@@ -67,7 +67,8 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 			"Without an API key (GITL_API_KEY or llm.api_key) it falls back to a\n" +
 			"deterministic offline review and prints a warning to stderr.\n\n" +
 			"--dry-run prints a cost estimate and exits without calling the API.\n" +
-			"--fail-on gates CI: exit non-zero when the risk level meets the threshold.",
+			"--fail-on gates CI: exits 2 when the risk level meets the threshold\n" +
+			"(exit 1 is reserved for tool/runtime errors, unrelated to the verdict).",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			staged, err := cmd.Flags().GetBool("staged")
@@ -92,7 +93,7 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().String("model", "", "model name")
 	cmd.Flags().String("base-url", "", "LLM API base URL")
 	cmd.Flags().String("format", "", "output format (md | text | json)")
-	cmd.Flags().String("fail-on", "", "exit non-zero when risk meets threshold (never | low | medium | high)")
+	cmd.Flags().String("fail-on", "", "exit 2 when risk meets threshold (never | low | medium | high)")
 	cmd.Flags().Float64("max-cost-usd", 0, "block the request if the estimated cost exceeds this (<=0 disables the guard)")
 	cmd.Flags().Bool("dry-run", false, "print a cost estimate and exit without calling the API")
 	cmd.Flags().Bool("no-cache", false, "skip LLM response cache (always call the API)")
@@ -346,7 +347,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	// a warm cache renders the cached review even under --dry-run.
 	if art, ok := plan.lookupCache(); ok {
 		stampRunMeta(&art, start, true, tier)
-		if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
+		if err := render.RenderWithTemplateColor(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile, wantColor(out, cfg)); err != nil {
 			return err
 		}
 		// A cache hit is still a review event: the trend log records the
@@ -383,7 +384,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 		resp, streamErr := s.Stream(ctx, plan.request(), cw)
 		if streamErr == nil {
 			// Risk header printed after [DONE] — body already written by Stream.
-			fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLine(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic))
+			fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLineColored(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic, wantColor(out, cfg)))
 			plan.storeCache(resp)
 			return finishReview(ctx, cfg, src, resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic)
 		}
@@ -398,12 +399,23 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 			"provider", cfg.LLM.Provider)
 	}
 
+	// Buffered wait indicator (U2): the only silent multi-second stretch of a
+	// review. TTY-gated, stderr-only, and never started in offline mode (the
+	// offline provider is local/instant) — the streaming branch above already
+	// provides live-token feedback and is never wrapped.
+	ind := newWaitIndicator(errOut)
+	if !cfg.OfflineMode() {
+		ind.start(waitingForModelMsg)
+	}
 	art, resp, err := plan.complete(ctx, provider)
+	// Stop (and clear the spinner line) unconditionally BEFORE any error
+	// return or stdout render, so stderr is restored first. Idempotent.
+	ind.stop()
 	if err != nil {
 		return err
 	}
 	stampRunMeta(&art, start, false, tier)
-	if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
+	if err := render.RenderWithTemplateColor(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile, wantColor(out, cfg)); err != nil {
 		return err
 	}
 	// Cache store happens AFTER the user sees the review: a slow remote-cache PUT

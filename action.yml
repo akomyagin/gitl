@@ -235,6 +235,9 @@ runs:
         # Single gitl invocation (one LLM call at most, §12.3): --format=json
         # carries both the review body (review_markdown) and the machine
         # risk level, so the comment body and the risk gate share one run.
+        # gitl exit codes: 0 = ok, 1 = tool/runtime error, 2 = the --fail-on
+        # risk gate triggered. The code is propagated as-is at the end of this
+        # step — do not "normalize" it, CI consumers may branch on 2 specifically.
         review_exit=0
         gitl review "$GITL_RANGE" \
           --format=json \

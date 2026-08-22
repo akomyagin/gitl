@@ -6,7 +6,7 @@
 repository's git history and turns it into a structured engineering artifact via LLM:
 
 - **`gitl review <range>`** — AI review of a commit range / PR with machine-readable
-  risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → non-zero exit code);
+  risk scoring (`low|medium|high`) for CI gating (`--fail-on=high` → exit code 2);
   streams tokens to the terminal in real time; on-disk LLM response cache with an
   optional shared remote cache for CI;
   custom system-prompt templates; `--staged` reviews staged (uncommitted) changes
@@ -51,7 +51,9 @@ go run ./cmd/gitl review pr/42
 
 # machine-readable output for CI + risk gating
 go run ./cmd/gitl review HEAD~5..HEAD --format=json
-go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # non-zero exit on high risk
+go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # exit code 2 on high risk
+# exit codes: 0 = ok (risk below --fail-on), 1 = tool/runtime error (git/LLM/
+# config failure), 2 = the --fail-on risk gate triggered — CI can branch on 2
 
 # estimate cost without making an API call
 go run ./cmd/gitl review HEAD~5..HEAD --dry-run
@@ -119,6 +121,10 @@ docker compose up ollama
 ```
 
 ## Configuration
+
+The fast path: `gitl init` writes a commented starter `.gitl.yaml` to the repo root
+(refusing to overwrite an existing one without `--force`; `--output` writes elsewhere).
+Edit it instead of copy-pasting from this section — the rest below is the full reference.
 
 Two levels, merged by priority:
 **flag > env > `.gitl.yaml` (repo) > `~/.config/gitl/config.yaml` (personal)**.
@@ -189,6 +195,24 @@ output:
 ```
 
 Disable per-call: `gitl review HEAD~5..HEAD --no-stream`
+
+### Color (`output.color`)
+
+On an interactive terminal, `gitl review` colorizes the risk level in the
+header (`HIGH` red, `MEDIUM` yellow, `LOW` green). Color switches off
+automatically when stdout is not a TTY (pipes, CI logs) and never appears in
+`--format=json` output. Precedence, highest first:
+
+1. `NO_COLOR` environment variable set (any value, even empty) — color off
+   ([no-color.org](https://no-color.org));
+2. `output.color: false` in config (or `GITL_OUTPUT_COLOR=false`) — color off;
+3. stdout is not a TTY — color off;
+4. otherwise — color on.
+
+```yaml
+output:
+  color: true   # default; set false to disable ANSI color
+```
 
 ### LLM response cache (`cache`)
 
@@ -386,7 +410,9 @@ Security best practices:
   `pull_request` event, but a shallow clone won't resolve `base.sha..head.sha`.
 - **`fail-on` defaults to `never`.** The Action only comments; it does not block merges
   unless you opt in explicitly (`fail-on: high`, etc.) — same "WARN by default, hard gate
-  is explicit opt-in" principle as the CLI (`--fail-on`).
+  is explicit opt-in" principle as the CLI (`--fail-on`). When the gate does trigger, the
+  job fails with gitl's exit code `2` (risk gate) — a genuine tool error fails with `1`,
+  so downstream steps can tell "risky change" from "gitl broke".
 - **Diff privacy.** In CI, the diff is sent to whichever LLM provider is configured
   (default: OpenAI-compatible API). For private code, use a self-hosted/enterprise provider
   (Ollama, Azure OpenAI) — see Providers above.
