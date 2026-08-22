@@ -41,6 +41,31 @@ func wantColor(w io.Writer, cfg *config.Config) bool {
 	return isTerminalFn(w)
 }
 
+// wantQuiet reports whether informational (non-error) stderr banners should be
+// suppressed (U9): the offline-review notice and the changelog --ai fallback
+// notice. Precedence mirrors wantColor — each layer can independently turn
+// suppression on, first match wins:
+//
+//  1. GITL_QUIET env var present (any value, even empty) → quiet
+//  2. --quiet flag set                                   → quiet
+//  3. output.quiet: true in config                       → quiet
+//  4. otherwise                                          → not quiet
+//
+// Never suppresses errors, the rendered review/risk output, or the --fail-on
+// gate message — those are not informational banners. The MCP path has no
+// *cobra.Command and derives quiet from cfg.Output.Quiet alone (RunReviewCore).
+func wantQuiet(cmd *cobra.Command, cfg *config.Config) bool {
+	if _, ok := os.LookupEnv("GITL_QUIET"); ok {
+		return true
+	}
+	// Commands lacking the flag just yield (false, err) — ignore the error,
+	// matching the existing `noCache, _ := cmd.Flags().GetBool(...)` idiom.
+	if q, _ := cmd.Flags().GetBool("quiet"); q {
+		return true
+	}
+	return cfg.Output.Quiet
+}
+
 // wantStream reports whether the streaming path should be used for this review:
 // terminal stdout, md/text format, not --no-stream, not --dry-run, not offline,
 // no custom output.template_file.

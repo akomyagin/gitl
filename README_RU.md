@@ -70,6 +70,10 @@ go run ./cmd/gitl review HEAD~5..HEAD --no-cache
 # отключить стриминг (буферизованный вывод)
 go run ./cmd/gitl review HEAD~5..HEAD --no-stream
 
+# подавить информационное уведомление об офлайн-режиме на stderr (ошибки и
+# сам вывод ревью не затрагиваются) — также через GITL_QUIET=1 или output.quiet: true
+go run ./cmd/gitl review HEAD~5..HEAD --quiet
+
 # changelog с последнего тега (или вся история, если тегов нет) — без LLM по умолчанию
 go run ./cmd/gitl changelog
 go run ./cmd/gitl changelog v1.2.0..HEAD --format=json
@@ -242,6 +246,27 @@ output:
 ```yaml
 output:
   color: true   # по умолчанию; false — отключить ANSI-цвет
+```
+
+### Тихий режим (`output.quiet`)
+
+Без API-ключа `review` печатает в stderr информационное уведомление «using
+deterministic offline review» при каждом запуске (а `changelog --ai` —
+аналогичное уведомление об откате). В заведомо офлайновых контекстах — прежде
+всего в pre-commit-хуке, который срабатывает на каждый коммит, — этот баннер
+превращается в шум. Подавить его можно любым из способов (каждый слой
+независимо включает подавление):
+
+1. флаг `--quiet` у `review` / `changelog`;
+2. установленная переменная окружения `GITL_QUIET` (любое значение, даже пустое);
+3. `output.quiet: true` в конфиге (или `GITL_OUTPUT_QUIET=true`).
+
+`--quiet` глушит только информационный баннер: ошибки, само ревью/changelog на
+stdout и гейт `--fail-on` не затрагиваются.
+
+```yaml
+output:
+  quiet: false   # по умолчанию; true — подавить офлайн-уведомления
 ```
 
 ### Кэш LLM-ответов (`cache`)
@@ -699,8 +724,10 @@ Pipelines → Repository variables; всегда ссылкой `$VAR`, нико
 ## Pre-commit хук (локально)
 
 `gitl` поставляет хук для фреймворка [pre-commit](https://pre-commit.com/), чтобы
-`gitl review --staged` запускался автоматически перед каждым коммитом — локально,
-в офлайн-режиме и без затрат по умолчанию.
+`gitl review --staged --quiet` запускался автоматически перед каждым коммитом —
+локально, в офлайн-режиме и без затрат по умолчанию (`--quiet` включён в
+манифесте хука по умолчанию, чтобы офлайн-уведомление не печаталось заново на
+каждый коммит).
 
 Добавьте в `.pre-commit-config.yaml` вашего репозитория:
 
@@ -739,6 +766,13 @@ hooks:
 - **Приватность диффа.** С реальным ключом staged-дифф уходит настроенному
   LLM-провайдеру — для приватного кода используйте self-hosted/enterprise-провайдера
   (Ollama, Azure OpenAI), см. раздел «Провайдеры» выше.
+- **Подавление офлайн-уведомления.** Манифест передаёт `--quiet` по умолчанию,
+  поэтому уведомление «using deterministic offline review» не печатается на
+  каждый коммит; тот же переключатель доступен в `review`/`changelog` как
+  `--quiet` / `GITL_QUIET`, либо для всего репозитория через
+  `output.quiet: true` (MCP-сервер учитывает только `output.quiet`/
+  `GITL_OUTPUT_QUIET` — у него нет флагов, поэтому короткий алиас `GITL_QUIET`
+  там не действует). Ошибки и сам вывод ревью не затрагиваются.
 
 ### Без фреймворка pre-commit
 
@@ -748,10 +782,11 @@ hooks:
 # .git/hooks/pre-commit  (chmod +x)
 #!/usr/bin/env bash
 set -euo pipefail
-# Offline, non-blocking review of staged changes (WARN by default).
-gitl review --staged || true
+# Offline, non-blocking review of staged changes (WARN by default); --quiet
+# suppresses the per-commit offline notice on stderr.
+gitl review --staged --quiet || true
 # To block the commit on high risk instead, replace the line above with:
-#   gitl review --staged --fail-on=high
+#   gitl review --staged --quiet --fail-on=high
 ```
 
 ## MCP-сервер

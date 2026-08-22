@@ -68,6 +68,10 @@ go run ./cmd/gitl review HEAD~5..HEAD --no-cache
 # disable streaming (non-interactive, buffered output)
 go run ./cmd/gitl review HEAD~5..HEAD --no-stream
 
+# suppress the informational offline-mode notice on stderr (errors and the
+# review output are unaffected) — also via GITL_QUIET=1 or output.quiet: true
+go run ./cmd/gitl review HEAD~5..HEAD --quiet
+
 # changelog from last tag (or full history if no tags) — no LLM by default
 go run ./cmd/gitl changelog
 go run ./cmd/gitl changelog v1.2.0..HEAD --format=json
@@ -235,6 +239,26 @@ automatically when stdout is not a TTY (pipes, CI logs) and never appears in
 ```yaml
 output:
   color: true   # default; set false to disable ANSI color
+```
+
+### Quiet mode (`output.quiet`)
+
+Without an API key, `review` prints an informational "using deterministic
+offline review" notice to stderr on every run (and `changelog --ai` prints an
+analogous fallback notice). In known-offline contexts — most notably the
+pre-commit hook, which fires on every commit — that banner is noise. Suppress
+it with any of (each layer can independently turn suppression on):
+
+1. the `--quiet` flag on `review` / `changelog`;
+2. the `GITL_QUIET` environment variable set (any value, even empty);
+3. `output.quiet: true` in config (or `GITL_OUTPUT_QUIET=true`).
+
+`--quiet` only silences the informational banner: errors, the rendered
+review/changelog on stdout, and the `--fail-on` gate are never affected.
+
+```yaml
+output:
+  quiet: false   # default; set true to suppress the offline notices
 ```
 
 ### LLM response cache (`cache`)
@@ -674,8 +698,9 @@ in the YAML):
 ## Pre-commit hook (local)
 
 `gitl` ships a [pre-commit](https://pre-commit.com/) framework hook so that
-`gitl review --staged` runs automatically before every commit — locally, offline,
-and at zero cost by default.
+`gitl review --staged --quiet` runs automatically before every commit — locally,
+offline, and at zero cost by default (`--quiet` is on by default in the hook
+manifest so the offline notice does not reprint on every commit).
 
 Add to your repository's `.pre-commit-config.yaml`:
 
@@ -714,6 +739,13 @@ Things to know:
 - **Diff privacy.** With a real key the staged diff goes to your configured LLM
   provider — use a self-hosted/enterprise provider (Ollama, Azure OpenAI) for
   private code, see Providers above.
+- **Suppress the offline notice.** The manifest passes `--quiet` by default, so
+  the per-commit "using deterministic offline review" stderr notice is silenced;
+  the same switch is available on `review`/`changelog` as `--quiet` /
+  `GITL_QUIET`, or repo-wide via `output.quiet: true` (the MCP server honors
+  `output.quiet`/`GITL_OUTPUT_QUIET` only — it has no flags, so the short
+  `GITL_QUIET` alias doesn't apply there). Errors and the review output itself
+  are unaffected.
 
 ### Without the pre-commit framework
 
@@ -723,10 +755,11 @@ A plain git hook works too:
 # .git/hooks/pre-commit  (chmod +x)
 #!/usr/bin/env bash
 set -euo pipefail
-# Offline, non-blocking review of staged changes (WARN by default).
-gitl review --staged || true
+# Offline, non-blocking review of staged changes (WARN by default); --quiet
+# suppresses the per-commit offline notice on stderr.
+gitl review --staged --quiet || true
 # To block the commit on high risk instead, replace the line above with:
-#   gitl review --staged --fail-on=high
+#   gitl review --staged --quiet --fail-on=high
 ```
 
 ## MCP server

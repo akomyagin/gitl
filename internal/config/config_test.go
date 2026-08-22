@@ -50,6 +50,46 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Cache.Remote.TimeoutMS != 3000 {
 		t.Errorf("default cache.remote.timeout_ms = %d, want 3000", cfg.Cache.Remote.TimeoutMS)
 	}
+	// Offline banners are loud by default (U9): quiet is strictly opt-in.
+	if cfg.Output.Quiet {
+		t.Error("default output.quiet = true, want false")
+	}
+}
+
+// TestOutputQuietRoundTrip: output.quiet set in a repo .gitl.yaml and via the
+// GITL_OUTPUT_QUIET env var (reachable through AutomaticEnv because the key is
+// registered in defaults() — same quirk as the Azure/cache.remote keys) both
+// survive Load.
+func TestOutputQuietRoundTrip(t *testing.T) {
+	t.Run("from .gitl.yaml", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, filepath.Join(dir, ".gitl.yaml"), "output:\n  quiet: true\n")
+		cfg, err := Load(Options{
+			RepoDir:      dir,
+			PersonalPath: filepath.Join(dir, "does-not-exist.yaml"),
+		})
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.Output.Quiet {
+			t.Error("output.quiet from .gitl.yaml = false, want true")
+		}
+	})
+
+	t.Run("from GITL_OUTPUT_QUIET", func(t *testing.T) {
+		dir := t.TempDir()
+		t.Setenv("GITL_OUTPUT_QUIET", "true")
+		cfg, err := Load(Options{
+			RepoDir:      dir,
+			PersonalPath: filepath.Join(dir, "does-not-exist.yaml"),
+		})
+		if err != nil {
+			t.Fatalf("Load() error = %v", err)
+		}
+		if !cfg.Output.Quiet {
+			t.Error("output.quiet from GITL_OUTPUT_QUIET = false, want true")
+		}
+	})
 }
 
 // TestEnvCacheRemoteKeys proves the cache.remote.* keys are reachable via env.

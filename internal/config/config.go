@@ -134,6 +134,12 @@ type OutputConfig struct {
 	// terminal and the format is md/text (Item 1). Disabled by --no-stream or in
 	// offline/json/non-TTY contexts.
 	Stream bool `mapstructure:"stream"`
+	// Quiet suppresses the informational offline-mode banners on stderr (U9):
+	// the "using deterministic offline review" notice and the changelog --ai
+	// fallback notice. Errors, the rendered review/risk output, and the
+	// --fail-on gate are never affected. Also reachable per-invocation via the
+	// --quiet flag and the GITL_QUIET env var (see internal/cli wantQuiet).
+	Quiet bool `mapstructure:"quiet"`
 }
 
 // DiffConfig bounds the diff sent to the LLM: max_diff_bytes is the truncation
@@ -213,17 +219,21 @@ func defaults() map[string]any {
 		// GITL_LLM_AZURE_OPENAI_* env vars — env vars are only consulted for
 		// keys viper already knows about (same quirk as the policy list keys,
 		// see TestEnvPolicyListKeys).
-		"llm.azure_openai.endpoint":             "",
-		"llm.azure_openai.deployment":           "",
-		"llm.azure_openai.api_version":          "",
-		"cost.max_cost_usd":                     0.50,
-		"cost.warn_at_usd":                      0.10,
-		"cost.price_per_1m_input":               0.0,
-		"cost.price_per_1m_output":              0.0,
-		"output.format":                         "md",
-		"output.color":                          true,
-		"output.template_file":                  "",
-		"output.stream":                         true,
+		"llm.azure_openai.endpoint":    "",
+		"llm.azure_openai.deployment":  "",
+		"llm.azure_openai.api_version": "",
+		"cost.max_cost_usd":            0.50,
+		"cost.warn_at_usd":             0.10,
+		"cost.price_per_1m_input":      0.0,
+		"cost.price_per_1m_output":     0.0,
+		"output.format":                "md",
+		"output.color":                 true,
+		"output.template_file":         "",
+		"output.stream":                true,
+		// Registered so viper's AutomaticEnv surfaces GITL_OUTPUT_QUIET (same
+		// quirk as the Azure/policy keys below); the short documented env var
+		// GITL_QUIET is read directly by internal/cli wantQuiet.
+		"output.quiet":                          false,
 		"prompt.system_template_file":           "",
 		"prompt.changelog_system_template_file": "",
 		"diff.max_diff_bytes":                   120000,
