@@ -186,6 +186,11 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 	}
 
 	slog.Debug("requesting AI changelog", "commits", len(commits))
+	// Buffered wait indicator (U2): changelog --ai never streams, so this call
+	// is otherwise silent for the whole round-trip. TTY-gated, stderr-only.
+	// Offline mode never reaches here (cut off before provider selection).
+	ind := newWaitIndicator(cmd.ErrOrStderr())
+	ind.start(waitingForModelMsg)
 	content, err := rc.CompleteRaw(ctx, llm.Request{
 		System:      system,
 		User:        user,
@@ -193,6 +198,7 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 		MaxTokens:   cfg.LLM.MaxTokens,
 		Temperature: cfg.LLM.Temperature,
 	})
+	ind.stop()
 	if err != nil {
 		return true, fmt.Errorf("changelog --ai failed: %w", err)
 	}
