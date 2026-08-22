@@ -100,13 +100,19 @@ func ExecuteWithExitCode(ctx context.Context, args []string) int {
 }
 
 // setupLogging configures the default slog logger. --verbose raises the level
-// to debug; otherwise warnings and above go to stderr.
+// to debug with full structured output; otherwise warnings and above go to
+// stderr as human-voiced `gitl: ...` lines (ROADMAP U6).
 func setupLogging(verbose bool) {
-	level := slog.LevelWarn
+	var handler slog.Handler
 	if verbose {
-		level = slog.LevelDebug
+		// Explicit opt-in to detail: full structured logs (time/level/attrs),
+		// also the right shape for CI grep. Debug and above.
+		handler = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelDebug})
+	} else {
+		// Default: one human `gitl: ...` voice, Warn and above only
+		// (humanHandler.Enabled gates the level).
+		handler = newHumanHandler(os.Stderr)
 	}
-	handler := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 	slog.SetDefault(slog.New(handler))
 }
 
