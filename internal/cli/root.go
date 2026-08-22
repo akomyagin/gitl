@@ -1,8 +1,8 @@
 // Package cli wires up the gitl command tree (cobra) and shared scaffolding:
 // persistent flags, viper-backed config loading, and slog setup.
 //
-// One file per command: root.go (this scaffold), version.go, review.go,
-// changelog.go, digest.go (see docs/TECHNICAL_PLAN.md §6, §9, §10).
+// One file per command: root.go (this scaffold), version.go, init.go,
+// review.go, changelog.go, digest.go (see docs/TECHNICAL_PLAN.md §6, §9, §10).
 package cli
 
 import (
@@ -46,6 +46,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&gf.configPath, "config", "", "path to personal config file (overrides ~/.config/gitl/config.yaml)")
 
 	root.AddCommand(newVersionCmd())
+	root.AddCommand(newInitCmd(gf))
 	root.AddCommand(newReviewCmd(gf))
 	root.AddCommand(newChangelogCmd(gf))
 	root.AddCommand(newDigestCmd(gf))

@@ -122,6 +122,10 @@ docker compose up ollama
 
 ## Configuration
 
+The fast path: `gitl init` writes a commented starter `.gitl.yaml` to the repo root
+(refusing to overwrite an existing one without `--force`; `--output` writes elsewhere).
+Edit it instead of copy-pasting from this section — the rest below is the full reference.
+
 Two levels, merged by priority:
 **flag > env > `.gitl.yaml` (repo) > `~/.config/gitl/config.yaml` (personal)**.
 The repo-level `.gitl.yaml` is committed as a shared team policy (risk threshold, excluded
