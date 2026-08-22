@@ -204,6 +204,31 @@ cache:
 Cache lives in `~/.cache/gitl/review/` (XDG-compliant). Disable per-call:
 `gitl review HEAD~5..HEAD --no-cache`
 
+In `--format=json` every review artifact carries additive run metadata
+(`schema_version` stays `1`; consumers that predate it see the same document
+plus two new keys):
+
+```json
+{
+  "duration_ms": 1234,
+  "cache": { "hit": true, "tier": "local" }
+}
+```
+
+- `duration_ms` — wall-clock of the whole review run, in milliseconds (a cache
+  hit still reports a real, usually tiny, number).
+- `cache.hit` — whether this review was served from the LLM response cache
+  instead of a fresh model call.
+- `cache.tier` — the cache topology in effect for the run: `none` (offline
+  mode, `--no-cache`, `cache.enabled: false`, or `ttl_hours <= 0`), `local`
+  (disk-only), or `tiered` (disk + remote). It reports the configured mode, not
+  which backend served a particular hit.
+
+There is deliberately no `usage` (token counts) field yet: gitl does not parse
+provider usage from responses, and a permanently empty field would be worse
+than an absent one. It will be added — additively, without a schema bump —
+when usage parsing lands.
+
 #### Shared remote cache (`cache.remote`) — opt-in
 
 **Opt-in, off by default, BYO-backend:** gitl never hosts a service and makes no

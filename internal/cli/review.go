@@ -321,6 +321,7 @@ func prSource(ctx context.Context, runner *gitlog.Runner, resolver PRResolver, p
 // the CLI-only concerns on top — --dry-run, terminal token streaming, rendering
 // to stdout, and the --fail-on exit-code gate (see review_core.go).
 func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src diffSource) error {
+	start := time.Now()
 	cfg, err := loadConfig(cmd, gf)
 	if err != nil {
 		return err
@@ -338,11 +339,13 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	if err != nil {
 		return err
 	}
+	tier := cacheTier(cfg, noCache)
 
 	// LLM response cache (Item 5): serve an equivalent prior review without a
 	// network call. Checked before --dry-run, preserving the historical order:
 	// a warm cache renders the cached review even under --dry-run.
 	if art, ok := plan.lookupCache(); ok {
+		stampRunMeta(&art, start, true, tier)
 		if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
 			return err
 		}
@@ -399,6 +402,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	if err != nil {
 		return err
 	}
+	stampRunMeta(&art, start, false, tier)
 	if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
 		return err
 	}

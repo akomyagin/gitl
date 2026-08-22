@@ -95,6 +95,16 @@ func TestMCPReviewHandlerOfflineRange(t *testing.T) {
 	if s, _ := m["review_markdown"].(string); s == "" {
 		t.Error("review_markdown is empty, want the offline review body")
 	}
+	// Run metadata (U8): RunReviewCore stamps duration_ms + cache, so the MCP
+	// JSON gains them with no mcp.go change. Offline mode: no cache, no hit.
+	if dur, ok := m["duration_ms"].(float64); !ok || dur < 0 {
+		t.Errorf("duration_ms = %v, want a number >= 0", m["duration_ms"])
+	}
+	if cache, ok := m["cache"].(map[string]any); !ok {
+		t.Errorf("cache missing or not an object: %v", m["cache"])
+	} else if cache["hit"] != false || cache["tier"] != "none" {
+		t.Errorf("cache = %v, want {hit: false, tier: %q} in offline mode", cache, "none")
+	}
 	// The offline notice must land on errOut (the server's stderr), never
 	// inside the protocol result.
 	if !strings.Contains(errOut.String(), "no LLM API key configured") {

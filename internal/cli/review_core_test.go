@@ -85,6 +85,145 @@ func TestRunReviewCoreOfflineReturnsArtifact(t *testing.T) {
 	if !strings.Contains(errOut.String(), "no LLM API key configured") {
 		t.Errorf("expected the offline-mode notice on ErrOut, got: %q", errOut.String())
 	}
+
+	// Run metadata (U8): a fresh offline call is never a cache hit, the cache
+	// tier is "none" (offline disables the cache), and the duration is a
+	// non-negative millisecond count (>= 0, not > 0 — a run can be sub-ms).
+	if art.Cache.Hit {
+		t.Error("Cache.Hit = true, want false (fresh offline call)")
+	}
+	if art.Cache.Tier != "none" {
+		t.Errorf("Cache.Tier = %q, want %q (offline mode disables the cache)", art.Cache.Tier, "none")
+	}
+	if art.DurationMS < 0 {
+		t.Errorf("DurationMS = %d, want >= 0", art.DurationMS)
+	}
+}
+
+// TestCacheTier: the cache.tier metadata literal for every configuration that
+// disables the cache, plus the local-vs-tiered split. tier only ever emits the
+// three documented literals — never a URL or token.
+func TestCacheTier(t *testing.T) {
+	base := func(t *testing.T) *config.Config {
+		cfg := coreTestConfig(t)
+		cfg.LLM.APIKey = "test-key" // network mode: cache eligible
+		return cfg
+	}
+	tests := []struct {
+		name    string
+		mutate  func(cfg *config.Config)
+		noCache bool
+		want    string
+	}{
+		{name: "cache disabled", mutate: func(cfg *config.Config) { cfg.Cache.Enabled = false }, want: "none"},
+		{name: "--no-cache", noCache: true, want: "none"},
+		{name: "offline mode", mutate: func(cfg *config.Config) { cfg.LLM.APIKey = "" }, want: "none"},
+		{name: "ttl_hours zero", mutate: func(cfg *config.Config) { cfg.Cache.TTLHours = 0 }, want: "none"},
+		{name: "ttl_hours negative", mutate: func(cfg *config.Config) { cfg.Cache.TTLHours = -1 }, want: "none"},
+		{name: "enabled disk-only", want: "local"},
+		{name: "enabled with remote", mutate: func(cfg *config.Config) { cfg.Cache.Remote.URL = "http://cache.example" }, want: "tiered"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base(t)
+			if tt.mutate != nil {
+				tt.mutate(cfg)
+			}
+			got := cacheTier(cfg, tt.noCache)
+			if got != tt.want {
+				t.Errorf("cacheTier = %q, want %q", got, tt.want)
+			}
+			switch got {
+			case "none", "local", "tiered":
+			default:
+				t.Errorf("cacheTier = %q, must be one of none|local|tiered (never a URL or token)", got)
+			}
+		})
+	}
+}
+
+// TestCacheTierAgreesWithPrepareReview is the drift guard: cacheTier reports
+// "none" exactly when prepareReview wires NO cache (plan.cache == nil), for
+// the same cfg+noCache. Both consume the shared useCache predicate; this test
+// fails if a future edit makes the reported tier lie about whether caching was
+// actually active.
+func TestCacheTierAgreesWithPrepareReview(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir()) // hermetic disk-cache dir for llmcache.Open
+	tests := []struct {
+		name    string
+		mutate  func(cfg *config.Config)
+		noCache bool
+	}{
+		{name: "cache disabled", mutate: func(cfg *config.Config) { cfg.Cache.Enabled = false }},
+		{name: "--no-cache", noCache: true},
+		{name: "offline mode", mutate: func(cfg *config.Config) { cfg.LLM.APIKey = "" }},
+		{name: "ttl_hours zero", mutate: func(cfg *config.Config) { cfg.Cache.TTLHours = 0 }},
+		{name: "enabled disk-only"},
+		{name: "enabled with remote", mutate: func(cfg *config.Config) { cfg.Cache.Remote.URL = "http://cache.example" }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := coreTestConfig(t)
+			cfg.LLM.APIKey = "test-key"
+			if tt.mutate != nil {
+				tt.mutate(cfg)
+			}
+			plan, err := prepareReview(cfg, coreRangeSource(), ReviewOptions{NoCache: tt.noCache})
+			if err != nil {
+				t.Fatalf("prepareReview: %v", err)
+			}
+			tier := cacheTier(cfg, tt.noCache)
+			if (tier != "none") != (plan.cache != nil) {
+				t.Errorf("cacheTier = %q but plan.cache != nil is %v — the two predicates drifted",
+					tier, plan.cache != nil)
+			}
+		})
+	}
+}
+
+// TestRunReviewCoreCacheHitStampsMetadata: a warm disk cache makes the core
+// return the cached artifact with Cache.Hit=true, Tier="local", and a
+// non-negative duration — with no provider call (the fake API key would fail
+// any real network path).
+func TestRunReviewCoreCacheHitStampsMetadata(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir()) // hermetic disk cache
+	cfg := coreTestConfig(t)
+	cfg.LLM.APIKey = "test-key-never-used"
+	src := coreRangeSource()
+
+	// Seed the cache under the exact key the core will compute: prepareReview
+	// with the same cfg+src+opts yields the same plan.cacheKey.
+	plan, err := prepareReview(cfg, src, ReviewOptions{})
+	if err != nil {
+		t.Fatalf("prepareReview: %v", err)
+	}
+	if plan.cache == nil || plan.cacheKey == "" {
+		t.Fatal("expected an active cache for a network-mode config")
+	}
+	seeded := llm.Response{
+		Content: "cached review body",
+		Risk:    llm.Risk{Level: "low", Summary: "cached"},
+	}
+	if err := plan.cache.Put(plan.cacheKey, seeded); err != nil {
+		t.Fatalf("cache.Put: %v", err)
+	}
+
+	art, err := RunReviewCore(context.Background(), cfg, src, ReviewOptions{})
+	if err != nil {
+		t.Fatalf("RunReviewCore: %v", err)
+	}
+	if art.ReviewMarkdown != "cached review body" {
+		t.Errorf("ReviewMarkdown = %q, want the seeded cached body", art.ReviewMarkdown)
+	}
+	if !art.Cache.Hit {
+		t.Error("Cache.Hit = false, want true (served from the seeded cache)")
+	}
+	if art.Cache.Tier != "local" {
+		t.Errorf("Cache.Tier = %q, want %q (disk-only cache)", art.Cache.Tier, "local")
+	}
+	if art.DurationMS < 0 {
+		t.Errorf("DurationMS = %d, want >= 0", art.DurationMS)
+	}
 }
 
 // TestRunReviewCoreIsDeterministicOffline: the offline provider is
