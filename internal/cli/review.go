@@ -395,7 +395,18 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 			"provider", cfg.LLM.Provider)
 	}
 
+	// Buffered wait indicator (U2): the only silent multi-second stretch of a
+	// review. TTY-gated, stderr-only, and never started in offline mode (the
+	// offline provider is local/instant) — the streaming branch above already
+	// provides live-token feedback and is never wrapped.
+	ind := newWaitIndicator(errOut)
+	if !cfg.OfflineMode() {
+		ind.start(waitingForModelMsg)
+	}
 	art, resp, err := plan.complete(ctx, provider)
+	// Stop (and clear the spinner line) unconditionally BEFORE any error
+	// return or stdout render, so stderr is restored first. Idempotent.
+	ind.stop()
 	if err != nil {
 		return err
 	}
