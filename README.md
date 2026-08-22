@@ -718,8 +718,11 @@ Things to know:
   private code, see Providers above.
 - **Suppress the offline notice.** The manifest passes `--quiet` by default, so
   the per-commit "using deterministic offline review" stderr notice is silenced;
-  the same switch is available anywhere as `--quiet` / `GITL_QUIET` /
-  `output.quiet: true`. Errors and the review output itself are unaffected.
+  the same switch is available on `review`/`changelog` as `--quiet` /
+  `GITL_QUIET`, or repo-wide via `output.quiet: true` (the MCP server honors
+  `output.quiet`/`GITL_OUTPUT_QUIET` only — it has no flags, so the short
+  `GITL_QUIET` alias doesn't apply there). Errors and the review output itself
+  are unaffected.
 
 ### Without the pre-commit framework
 
