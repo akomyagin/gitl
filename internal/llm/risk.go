@@ -194,6 +194,13 @@ func ValidFailOnLevel(s string) bool {
 	return ok
 }
 
+// FailOnLevels lists the valid --fail-on values in rank order (never < low <
+// medium < high). Single source of truth alongside riskOrder/ValidFailOnLevel;
+// returns a fresh slice each call so callers cannot mutate the canonical set.
+func FailOnLevels() []string {
+	return []string{"never", RiskLow, RiskMedium, RiskHigh}
+}
+
 // fencedBlockRe matches a fenced code block, capturing its language tag and
 // body. It is tolerant of surrounding whitespace and multi-line bodies,
 // including trailing spaces/tabs after the language tag (e.g. "```risk \n" —

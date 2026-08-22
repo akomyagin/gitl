@@ -20,6 +20,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"text/template"
 	"time"
@@ -29,6 +30,7 @@ import (
 
 	"github.com/akomyagin/gitl/internal/llm"
 	"github.com/akomyagin/gitl/internal/render"
+	"github.com/akomyagin/gitl/internal/suggest"
 )
 
 // Config is the fully merged, validated configuration for one gitl invocation.
@@ -455,6 +457,18 @@ func bindChangedFlags(v *viper.Viper, flags *pflag.FlagSet) error {
 	return bindErr
 }
 
+// enumErr builds a validation error for an enum-like key, appending a
+// "(did you mean %q?)" hint when input is a plausible typo of one of valid.
+// When no near match exists the message is byte-for-byte identical to the
+// plain "must be one of" form.
+func enumErr(key, input, oneOf string, valid []string) error {
+	lc := strings.ToLower(strings.TrimSpace(input))
+	if s, ok := suggest.Closest(lc, valid); ok {
+		return fmt.Errorf("%s must be one of %s, got %q (did you mean %q?)", key, oneOf, input, s)
+	}
+	return fmt.Errorf("%s must be one of %s, got %q", key, oneOf, input)
+}
+
 // validate checks invariants that must hold before the config is used. It also
 // normalizes policy.fail_on to lowercase so downstream comparisons don't need
 // to re-normalize.
@@ -475,9 +489,23 @@ func (c *Config) validate() error {
 	// validFailOnLevels is derived from llm.ValidFailOnLevel (single source of
 	// truth in the llm package) so config validation and comparison never diverge.
 	if !llm.ValidFailOnLevel(failOn) {
-		return fmt.Errorf("policy.fail_on must be one of never|low|medium|high, got %q", c.Policy.FailOn)
+		return enumErr("policy.fail_on", c.Policy.FailOn, "never|low|medium|high", llm.FailOnLevels())
 	}
 	c.Policy.FailOn = failOn
+
+	// llm.provider is a closed set of five, validated here so a typo'd
+	// provider fails loudly at config-load time — including in offline mode,
+	// where the bad value would otherwise be silently replaced by the offline
+	// provider and never reach llm.NewClient's dispatch-time check. Normalized
+	// to lowercase, mirroring policy.fail_on/output.format.
+	provider := strings.ToLower(strings.TrimSpace(c.LLM.Provider))
+	if provider == "" {
+		provider = llm.ProviderOpenAI // matches defaults()["llm.provider"]
+	}
+	if !slices.Contains(llm.Providers(), provider) {
+		return enumErr("llm.provider", c.LLM.Provider, strings.Join(llm.Providers(), "|"), llm.Providers())
+	}
+	c.LLM.Provider = provider
 
 	// output.format is validated here — not only inside internal/render — so a
 	// misspelled value (e.g. "jsn") fails at config-load time, BEFORE a paid
@@ -488,7 +516,7 @@ func (c *Config) validate() error {
 	case render.FormatMarkdown, render.FormatText, render.FormatJSON, "":
 		// valid
 	default:
-		return fmt.Errorf("output.format must be one of md|text|json, got %q", c.Output.Format)
+		return enumErr("output.format", c.Output.Format, "md|text|json", []string{"md", "text", "json"})
 	}
 	c.Output.Format = format
 
