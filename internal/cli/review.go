@@ -343,7 +343,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	// network call. Checked before --dry-run, preserving the historical order:
 	// a warm cache renders the cached review even under --dry-run.
 	if art, ok := plan.lookupCache(); ok {
-		if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
+		if err := render.RenderWithTemplateColor(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile, wantColor(out, cfg)); err != nil {
 			return err
 		}
 		// A cache hit is still a review event: the trend log records the
@@ -380,7 +380,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 		resp, streamErr := s.Stream(ctx, plan.request(), cw)
 		if streamErr == nil {
 			// Risk header printed after [DONE] — body already written by Stream.
-			fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLine(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic))
+			fmt.Fprintf(out, "\n---\n%s\n", render.RiskHeaderLineColored(resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic, wantColor(out, cfg)))
 			plan.storeCache(resp)
 			return finishReview(ctx, cfg, src, resp.Risk.Level, resp.Risk.Summary, resp.Risk.Heuristic)
 		}
@@ -399,7 +399,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	if err != nil {
 		return err
 	}
-	if err := render.RenderWithTemplate(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile); err != nil {
+	if err := render.RenderWithTemplateColor(out, art, render.Format(cfg.Output.Format), cfg.Output.TemplateFile, wantColor(out, cfg)); err != nil {
 		return err
 	}
 	// Cache store happens AFTER the user sees the review: a slow remote-cache PUT
