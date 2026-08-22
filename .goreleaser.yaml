@@ -5,6 +5,15 @@ version: 2
 before:
   hooks:
     - go mod download
+    # Generate shell completion scripts shipped inside the release archives
+    # (and installed by the Homebrew formula below). `go run` is used because
+    # the release binaries are not built yet at `before` time. PowerShell is
+    # intentionally not shipped (Homebrew is macOS/Linux); it stays available
+    # on demand via `gitl completion powershell`.
+    - mkdir -p completions
+    - sh -c 'go run ./cmd/gitl completion bash > completions/gitl.bash'
+    - sh -c 'go run ./cmd/gitl completion zsh > completions/_gitl'
+    - sh -c 'go run ./cmd/gitl completion fish > completions/gitl.fish'
 
 builds:
   - id: gitl
@@ -34,6 +43,8 @@ archives:
       - goos: windows
         formats:
           - zip
+    files:
+      - completions/*
 
 checksum:
   name_template: checksums.txt
@@ -71,6 +82,9 @@ brews:
     directory: Formula
     install: |
       bin.install "gitl"
+      bash_completion.install "completions/gitl.bash" => "gitl"
+      zsh_completion.install "completions/_gitl"
+      fish_completion.install "completions/gitl.fish"
     test: |
       system "#{bin}/gitl", "version"
 

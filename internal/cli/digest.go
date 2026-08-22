@@ -39,6 +39,7 @@ func newDigestCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().String("format", "", "output format (md | text | json)")
 	cmd.Flags().Bool("tui", false, "interactive TUI viewer (requires a terminal)")
 
+	registerEnumCompletions(cmd)
 	return cmd
 }
 

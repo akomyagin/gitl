@@ -84,7 +84,16 @@ func ProviderRequiresKey(provider string) bool {
 // (self-hosted). Mirrors ProviderRequiresKey as a per-provider trait.
 func ProviderIsFree(provider string) bool { return provider == ProviderOllama }
 
+// ProviderNames is the canonical list of supported provider identifiers, in
+// help-text order. It backs both shell completion (--provider) and
+// ProvidersHelp; adding a provider means updating this slice, and a test
+// guards that ProvidersHelp stays in sync.
+var ProviderNames = []string{
+	ProviderOpenAI, ProviderOllama, ProviderAzure, ProviderAnthropic, ProviderGemini,
+}
+
 // ProvidersHelp is the pipe-separated provider list for CLI flag help text.
+// Kept in sync with ProviderNames (same values, same order).
 const ProvidersHelp = ProviderOpenAI + " | " + ProviderOllama + " | " + ProviderAzure + " | " + ProviderAnthropic + " | " + ProviderGemini
 
 // Providers lists every supported provider identifier, in the same order as

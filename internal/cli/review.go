@@ -100,6 +100,7 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().Bool("no-stream", false, "disable token-by-token streaming (wait for full response)")
 	cmd.Flags().Bool("staged", false, "review staged (indexed, not yet committed) changes instead of a revision range")
 
+	registerEnumCompletions(cmd)
 	return cmd
 }
 

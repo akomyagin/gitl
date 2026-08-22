@@ -114,6 +114,30 @@ npx gitl-cli review HEAD~5..HEAD   # или: npm install -g gitl-cli
 # Либо подписанный релизный бинарь из GitHub Releases (см. VERIFY.md)
 ```
 
+### Автодополнение (shell completions)
+
+`gitl` поставляет cobra-сгенерированные скрипты автодополнения для bash, zsh,
+fish и PowerShell.
+
+Homebrew устанавливает автодополнение bash/zsh/fish автоматически (релизные
+архивы тоже содержат скрипты в `completions/`). Иначе — включите вручную:
+
+```bash
+# bash (текущая сессия)
+source <(gitl completion bash)
+# bash (постоянно) — Linux
+gitl completion bash > /etc/bash_completion.d/gitl
+# zsh (постоянно)
+gitl completion zsh > "${fpath[1]}/_gitl"
+# fish
+gitl completion fish > ~/.config/fish/completions/gitl.fish
+# PowerShell
+gitl completion powershell | Out-String | Invoke-Expression
+```
+
+Флаги с фиксированным набором значений — `--format` (md|text|json), `--fail-on`
+(never|low|medium|high) и `--provider` — дополняются до допустимых значений.
+
 ### Локальный тест мультипровайдерности (Ollama)
 
 `docker-compose.yml` поднимает **только dev-зависимость** — локальный Ollama

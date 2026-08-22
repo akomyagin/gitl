@@ -111,6 +111,29 @@ npx gitl-cli review HEAD~5..HEAD   # or: npm install -g gitl-cli
 # Or download a signed release binary from GitHub Releases (see VERIFY.md)
 ```
 
+### Shell completions
+
+`gitl` ships cobra-generated completions for bash, zsh, fish, and PowerShell.
+
+Homebrew installs bash/zsh/fish completions automatically (release archives also
+carry them under `completions/`). Otherwise, enable them on demand:
+
+```bash
+# bash (current shell)
+source <(gitl completion bash)
+# bash (persistent) — Linux
+gitl completion bash > /etc/bash_completion.d/gitl
+# zsh (persistent)
+gitl completion zsh > "${fpath[1]}/_gitl"
+# fish
+gitl completion fish > ~/.config/fish/completions/gitl.fish
+# PowerShell
+gitl completion powershell | Out-String | Invoke-Expression
+```
+
+Flags with fixed value sets — `--format` (md|text|json), `--fail-on`
+(never|low|medium|high), and `--provider` — complete their allowed values.
+
 ### Local multi-provider test (Ollama)
 
 `docker-compose.yml` starts **only the dev dependency** — a local Ollama instance for
