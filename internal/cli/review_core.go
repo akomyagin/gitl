@@ -273,7 +273,9 @@ func RunReviewCore(ctx context.Context, cfg *config.Config, src diffSource, opts
 			return render.Artifact{}, err
 		}
 	}
-	provider, err := selectProvider(opts.errWriter(), cfg, src.Commits, plan.diff)
+	// No *cobra.Command exists on this path (MCP), so quiet is derived from
+	// cfg.Output.Quiet alone — reachable via output.quiet / GITL_OUTPUT_QUIET.
+	provider, err := selectProvider(opts.errWriter(), cfg, src.Commits, plan.diff, cfg.Output.Quiet)
 	if err != nil {
 		return render.Artifact{}, err
 	}

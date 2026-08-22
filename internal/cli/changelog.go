@@ -53,6 +53,7 @@ func newChangelogCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().Float64("max-cost-usd", 0, "block the request if the estimated cost exceeds this (<=0 disables the guard); only used with --ai")
 	cmd.Flags().Bool("dry-run", false, "print a cost estimate and exit without calling the API; only used with --ai")
 	cmd.Flags().Bool("no-cache", false, "skip LLM response cache (always call the API); only used with --ai")
+	cmd.Flags().Bool("quiet", false, "suppress the informational --ai offline-fallback notice on stderr (errors and changelog output are unaffected)")
 
 	return cmd
 }
@@ -119,7 +120,12 @@ func runChangelog(ctx context.Context, cmd *cobra.Command, gf *globalFlags, args
 // symmetric with review.
 func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config, revRange string, commits []gitlog.Commit, cl gitlog.Changelog) (done bool, err error) {
 	if cfg.OfflineMode() {
-		fmt.Fprintln(cmd.ErrOrStderr(), "gitl: --ai requested but no LLM API key configured — falling back to the deterministic changelog (set GITL_API_KEY for AI prose).")
+		// Informational fallback banner only — suppressible via --quiet /
+		// GITL_QUIET / output.quiet (U9). The fall-through to the deterministic
+		// changelog happens either way.
+		if !wantQuiet(cmd, cfg) {
+			fmt.Fprintln(cmd.ErrOrStderr(), "gitl: --ai requested but no LLM API key configured — falling back to the deterministic changelog (set GITL_API_KEY for AI prose).")
+		}
 		return false, nil
 	}
 

@@ -3,7 +3,9 @@
 - id: gitl-review
   name: gitl review (staged changes)
   description: AI review of staged changes before commit (offline by default — no API key, no network, no cost; set GITL_API_KEY for a real AI review).
-  entry: gitl review --staged
+  # --quiet suppresses the per-commit "using deterministic offline review"
+  # stderr notice (U9); errors and the review output itself are unaffected.
+  entry: gitl review --staged --quiet
   language: golang
   pass_filenames: false
   always_run: true

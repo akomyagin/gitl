@@ -138,7 +138,10 @@ func TestPreCommitHooksYAML(t *testing.T) {
 
 	for _, want := range []string{
 		"id: gitl-review",
-		"entry: gitl review --staged",
+		// --quiet is deliberate (U9): the hook runs on EVERY commit, so the
+		// per-invocation offline banner would reprint each time. Errors and
+		// the review output itself are unaffected by --quiet.
+		"entry: gitl review --staged --quiet",
 		"language: golang",
 		"pass_filenames: false",
 	} {

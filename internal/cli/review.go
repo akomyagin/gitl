@@ -99,6 +99,7 @@ func newReviewCmd(gf *globalFlags) *cobra.Command {
 	cmd.Flags().Bool("no-cache", false, "skip LLM response cache (always call the API)")
 	cmd.Flags().Bool("no-stream", false, "disable token-by-token streaming (wait for full response)")
 	cmd.Flags().Bool("staged", false, "review staged (indexed, not yet committed) changes instead of a revision range")
+	cmd.Flags().Bool("quiet", false, "suppress the informational offline-mode notice on stderr (errors and review output are unaffected)")
 
 	return cmd
 }
@@ -368,7 +369,7 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 		}
 	}
 
-	provider, err := selectProvider(errOut, cfg, src.Commits, plan.diff)
+	provider, err := selectProvider(errOut, cfg, src.Commits, plan.diff, wantQuiet(cmd, cfg))
 	if err != nil {
 		return err
 	}
@@ -519,10 +520,14 @@ func buildArtifact(cfg *config.Config, revRange string, commits []gitlog.Commit,
 
 // selectProvider returns the network client when an API key is configured, or
 // the deterministic offline provider otherwise (printing a warning to errOut —
-// the CLI's stderr — not failing).
-func selectProvider(errOut io.Writer, cfg *config.Config, commits []gitlog.Commit, diff string) (llm.Provider, error) {
+// the CLI's stderr — not failing). quiet suppresses ONLY that informational
+// banner (U9: --quiet / GITL_QUIET / output.quiet, see wantQuiet); real errors
+// from newNetworkClient are returned regardless.
+func selectProvider(errOut io.Writer, cfg *config.Config, commits []gitlog.Commit, diff string, quiet bool) (llm.Provider, error) {
 	if cfg.OfflineMode() {
-		fmt.Fprintln(errOut, "gitl: no LLM API key configured — using deterministic offline review (set GITL_API_KEY for an AI review).")
+		if !quiet {
+			fmt.Fprintln(errOut, "gitl: no LLM API key configured — using deterministic offline review (set GITL_API_KEY for an AI review).")
+		}
 		return llm.NewOffline(commits, diff), nil
 	}
 	return newNetworkClient(cfg)
