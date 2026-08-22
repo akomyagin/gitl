@@ -87,6 +87,13 @@ func ProviderIsFree(provider string) bool { return provider == ProviderOllama }
 // ProvidersHelp is the pipe-separated provider list for CLI flag help text.
 const ProvidersHelp = ProviderOpenAI + " | " + ProviderOllama + " | " + ProviderAzure + " | " + ProviderAnthropic + " | " + ProviderGemini
 
+// Providers lists every supported provider identifier, in the same order as
+// ProvidersHelp. Used for config validation and "did you mean" suggestions;
+// returns a fresh slice each call so callers cannot mutate the canonical set.
+func Providers() []string {
+	return []string{ProviderOpenAI, ProviderOllama, ProviderAzure, ProviderAnthropic, ProviderGemini}
+}
+
 // StatusError is a typed HTTP error carrying the status code and whether the
 // request is worth retrying. It is used with errors.As so retry classification
 // never relies on string matching.

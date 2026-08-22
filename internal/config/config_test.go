@@ -401,6 +401,109 @@ func TestValidateNormalizesOutputFormatCase(t *testing.T) {
 	}
 }
 
+// TestValidateBadOutputFormatSuggestsNearest proves a plausible output.format
+// typo gets a "did you mean" hint appended to the existing error, which still
+// lists the full valid set.
+func TestValidateBadOutputFormatSuggestsNearest(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "output:\n  format: jsn\n")
+	_, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err == nil {
+		t.Fatal("expected error for output.format = \"jsn\"")
+	}
+	if !strings.Contains(err.Error(), `did you mean "json"`) {
+		t.Errorf("error %q does not suggest \"json\"", err)
+	}
+	if !strings.Contains(err.Error(), "md|text|json") {
+		t.Errorf("error %q does not mention the valid options md|text|json", err)
+	}
+}
+
+// TestValidateBadFailOnSuggestsNearest proves a plausible policy.fail_on typo
+// gets a "did you mean" hint alongside the full valid set.
+func TestValidateBadFailOnSuggestsNearest(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "policy:\n  fail_on: hgih\n")
+	_, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err == nil {
+		t.Fatal("expected error for policy.fail_on = \"hgih\"")
+	}
+	if !strings.Contains(err.Error(), `did you mean "high"`) {
+		t.Errorf("error %q does not suggest \"high\"", err)
+	}
+	if !strings.Contains(err.Error(), "never|low|medium|high") {
+		t.Errorf("error %q does not mention the valid options never|low|medium|high", err)
+	}
+}
+
+// TestValidateBadProviderSuggestsNearest proves llm.provider is now validated
+// at config-load time (a closed set of five) and a plausible typo gets a
+// "did you mean" hint.
+func TestValidateBadProviderSuggestsNearest(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "llm:\n  provider: opneai\n")
+	_, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err == nil {
+		t.Fatal("expected error for llm.provider = \"opneai\"")
+	}
+	if !strings.Contains(err.Error(), `did you mean "openai"`) {
+		t.Errorf("error %q does not suggest \"openai\"", err)
+	}
+	if !strings.Contains(err.Error(), "llm.provider must be one of") {
+		t.Errorf("error %q does not name llm.provider with its valid set", err)
+	}
+}
+
+// TestValidateBadProviderNoSuggestionForGarbage pins the negative contract:
+// wildly-unrelated input still errors and lists the valid providers, but gets
+// NO "did you mean" hint (suggesting a random provider would be noise).
+func TestValidateBadProviderNoSuggestionForGarbage(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "llm:\n  provider: xyz123\n")
+	_, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err == nil {
+		t.Fatal("expected error for llm.provider = \"xyz123\"")
+	}
+	if strings.Contains(err.Error(), "did you mean") {
+		t.Errorf("error %q must not contain a suggestion for garbage input", err)
+	}
+	if !strings.Contains(err.Error(), "openai|ollama|azure_openai|anthropic|gemini") {
+		t.Errorf("error %q does not list the valid providers", err)
+	}
+}
+
+// TestValidateRejectsUnknownProvider guards the offline-mode gap: previously a
+// bad provider with an empty api_key silently ran offline and never errored.
+// Provider is now validated at load time, key or no key.
+func TestValidateRejectsUnknownProvider(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	// No api_key → offline mode; the provider check must still fire.
+	writeFile(t, personalPath, "llm:\n  provider: notaprovider\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err == nil {
+		t.Error("expected error for llm.provider = \"notaprovider\" (offline mode must not mask it)")
+	}
+}
+
+// TestValidateNormalizesProviderCase proves a mixed-case provider is accepted
+// and normalized to lowercase, mirroring the fail_on/format pattern.
+func TestValidateNormalizesProviderCase(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "llm:\n  provider: OpenAI\n")
+	cfg, err := Load(Options{RepoDir: dir, PersonalPath: personalPath})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.LLM.Provider != "openai" {
+		t.Errorf("llm.provider = %q, want normalized \"openai\"", cfg.LLM.Provider)
+	}
+}
+
 // TestValidateAcceptsEmptyOutputFormat proves an explicitly empty output.format
 // is a legal "unset" value (render defaults it to md), and an absent key keeps
 // the built-in "md" default.
