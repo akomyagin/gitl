@@ -1,0 +1,66 @@
+name: Bug report
+description: Something in gitl isn't working the way it should
+labels: ["bug"]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: gitl version
+      description: Output of `gitl version`
+      placeholder: "gitl 0.6.2 (commit ..., built ...)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      description: Was an API key configured, or was this offline/deterministic mode?
+      options:
+        - AI mode (API key configured)
+        - Offline mode (no key)
+        - Not sure
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: OS / architecture
+      placeholder: "macOS 15 arm64 / Ubuntu 24.04 amd64 / Windows 11 amd64"
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Exact command
+      description: The full command you ran, including flags (redact your API key)
+      render: shell
+      placeholder: "gitl review HEAD~5..HEAD --format=json --fail-on=high"
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include the full output/error if possible
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: >-
+        A minimal commit range or public repo that reproduces it helps a lot —
+        offline-mode bugs are usually reproducible from the repo history alone.
