@@ -35,6 +35,52 @@ func sampleResponse() llm.Response {
 	}
 }
 
+func TestPublicConstructorsRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		open func(time.Duration) (Cache, error)
+	}{
+		{
+			name: "New",
+			open: func(ttl time.Duration) (Cache, error) {
+				return New(ttl)
+			},
+		},
+		{
+			name: "Open",
+			open: func(ttl time.Duration) (Cache, error) {
+				return Open(Options{TTL: ttl}), nil
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cacheDir := t.TempDir()
+			t.Setenv("HOME", cacheDir)
+			t.Setenv("XDG_CACHE_HOME", cacheDir)
+
+			cache, err := tt.open(time.Hour)
+			if err != nil {
+				t.Fatalf("construct cache: %v", err)
+			}
+
+			key := testKey()
+			want := sampleResponse()
+			if err := cache.Put(key, want); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+			got, ok, err := cache.Get(key)
+			if err != nil {
+				t.Fatalf("Get: %v", err)
+			}
+			if !ok || got != want {
+				t.Fatalf("round trip: ok=%v got=%+v want=%+v", ok, got, want)
+			}
+		})
+	}
+}
+
 func TestMissPutHit(t *testing.T) {
 	c := NewInDir(t.TempDir(), 24*time.Hour)
 	key := testKey()
