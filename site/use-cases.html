@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gitl — use cases</title>
+<meta name="description" content="Four worked gitl scenarios: gating a PR on AI risk in CI, an offline pre-commit safety net, release notes in one command, and a multi-repo standup digest.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://akomyagin.github.io/gitl/use-cases.html">
+<meta property="og:title" content="gitl — use cases">
+<meta property="og:description" content="Four worked gitl scenarios: gating a PR on AI risk in CI, an offline pre-commit safety net, release notes in one command, and a multi-repo standup digest.">
+<meta property="og:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="gitl — use cases">
+<meta name="twitter:description" content="Four worked gitl scenarios: gating a PR on AI risk in CI, an offline pre-commit safety net, release notes in one command, and a multi-repo standup digest.">
+<meta name="twitter:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="container">
+    <a class="logo" href="index.html"><span>&gt;</span> gitl</a>
+    <nav class="main">
+      <a href="index.html">Home</a>
+      <a class="active" href="use-cases.html">Use cases</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/akomyagin/gitl">GitHub</a>
+    </nav>
+    <div class="lang"><span class="cur">EN</span> · <a href="ru/use-cases.html">RU</a></div>
+  </div>
+</header>
+
+<main class="container">
+
+<h1>Use cases</h1>
+<p class="subtitle">Four scenarios I actually run, worked end-to-end. Every
+command and config block here is real and copy-pasteable.</p>
+
+<h2 id="ci-gate">1. Gate a PR on AI risk in CI</h2>
+
+<p><strong>The problem.</strong> A large or sensitive change lands in a PR and
+nobody flags it before merge. You want an automatic reviewer that not only
+comments but can <em>fail the check</em> above a risk threshold you choose.</p>
+
+<p><strong>The setup.</strong> Add <code>.github/workflows/gitl-review.yml</code>
+to your repository:</p>
+
+<pre><code>name: gitl review
+on:
+  pull_request:
+
+permissions:
+  contents: read          <span class="c"># for checkout</span>
+  pull-requests: write    <span class="c"># to post the review comment</span>
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0    <span class="c"># required: shallow clones can't resolve base..head</span>
+
+      - uses: akomyagin/gitl@v0.6.2
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   <span class="c"># BYOK; omit for offline mode</span>
+          fail-on: high                               <span class="c"># optional: block merge on high risk</span></code></pre>
+
+<p><strong>What you get.</strong> The Action posts a sticky PR comment with the
+review and risk level, updated on every push. With <code>fail-on: high</code> the
+check fails with gitl's exit code <code>2</code> when the risk gate triggers — a
+genuine tool error fails with <code>1</code>, so downstream steps can tell "risky
+change" from "gitl broke". Without a key it runs the deterministic offline
+review: no network, no cost, CI stays green.</p>
+
+<figure class="demo">
+  <img src="assets/demo-gate.gif" alt="gitl --fail-on=high failing with exit code 2">
+  <figcaption><code>--fail-on=high</code> turns a high-risk range into exit code
+  2 your CI can gate on.</figcaption>
+</figure>
+
+<p>GitLab, Bitbucket, and Gitea wrappers exist too — see
+<a href="docs.html#ci-integrations">CI integrations</a>.</p>
+
+<h2 id="pre-commit">2. Pre-commit safety net</h2>
+
+<p><strong>The problem.</strong> You want a last look at what you're about to
+commit — without paying an API call on every commit, and without adding latency
+to the hot path.</p>
+
+<p><strong>The setup.</strong> gitl ships a
+<a href="https://pre-commit.com/">pre-commit</a> framework hook. Add to your
+<code>.pre-commit-config.yaml</code>:</p>
+
+<pre><code>repos:
+  - repo: https://github.com/akomyagin/gitl
+    rev: v0.6.2   <span class="c"># pin to a released tag</span>
+    hooks:
+      - id: gitl-review</code></pre>
+
+<p>then run <code>pre-commit install</code>. To opt into a blocking hook with a
+cost cap:</p>
+
+<pre><code>hooks:
+  - id: gitl-review
+    args: [--fail-on=high, --max-cost-usd=0.05]</code></pre>
+
+<p><strong>What you get.</strong> <code>gitl review --staged --quiet</code> runs
+before every commit — offline and free by default (no key, no network). The hook
+warns but doesn't block unless you opt in. Export <code>GITL_API_KEY</code> if
+you want a real AI review instead of the heuristic. A plain
+<code>.git/hooks/pre-commit</code> one-liner works too — see
+<a href="docs.html#pre-commit">the docs</a>.</p>
+
+<h2 id="release-notes">3. Release notes in one command</h2>
+
+<p><strong>The problem.</strong> Writing release notes by scrolling
+<code>git log</code> is tedious, and raw conventional-commit subjects aren't
+prose anyone wants to read.</p>
+
+<p><strong>The setup.</strong></p>
+
+<pre><code><span class="c"># deterministic Keep-a-Changelog output, grouped by conventional commits</span>
+gitl changelog
+
+<span class="c"># the model rewrites it as readable release-note prose</span>
+GITL_API_KEY=sk-... gitl changelog --ai</code></pre>
+
+<p><strong>What you get.</strong> By default: a deterministic changelog from the
+last tag to <code>HEAD</code>, no LLM involved. With <code>--ai</code>: the model
+turns the grouped result into release-note prose and reclassifies significant
+non-conventional commits out of "Other". Without a key (or on a malformed model
+response) it falls back to the deterministic changelog with a warning — the
+command never fails, so it's safe to put in a release script.</p>
+
+<h2 id="digest">4. Multi-repo standup digest</h2>
+
+<p><strong>The problem.</strong> Your work is spread across several
+repositories, and "what happened here in the last two weeks" means opening each
+one and scrolling logs.</p>
+
+<p><strong>The setup.</strong></p>
+
+<pre><code><span class="c"># activity summary across repos, collected in parallel</span>
+gitl digest --days=14 --repos=../service-a,../service-b,../infra
+
+<span class="c"># interactive TUI viewer</span>
+gitl digest --days=14 --repos=../service-a,../service-b --tui</code></pre>
+
+<p><strong>What you get.</strong> Commits, files, and line counts by author and
+topic per repository — one unreachable repo doesn't fail the rest. The TUI
+viewer scrolls with <code>j</code>/<code>k</code> or the arrow keys;
+<code>q</code> quits. JSON output (<code>--format=json</code>) feeds dashboards.</p>
+
+<figure class="demo">
+  <img src="assets/demo-digest-tui.gif" alt="gitl digest --tui browsing an activity summary">
+  <figcaption><code>gitl digest --tui</code> — an interactive viewer for the
+  activity summary.</figcaption>
+</figure>
+
+<p><a href="docs.html">Full documentation →</a></p>
+
+</main>
+
+<footer class="site">
+  <div class="container">
+    <a href="https://github.com/akomyagin/gitl">gitl on GitHub</a> ·
+    <a href="https://github.com/akomyagin/gitl/blob/master/LICENSE">MIT license</a> ·
+    no telemetry, ever
+  </div>
+</footer>
+
+</body>
+</html>

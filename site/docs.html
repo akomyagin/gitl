@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gitl — documentation</title>
+<meta name="description" content="Full gitl reference: commands, flags, exit codes, configuration (providers, cache, templates), CI integrations for GitHub/GitLab/Bitbucket/Gitea, pre-commit hook, MCP server.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://akomyagin.github.io/gitl/docs.html">
+<meta property="og:title" content="gitl — documentation">
+<meta property="og:description" content="Full gitl reference: commands, flags, exit codes, configuration (providers, cache, templates), CI integrations for GitHub/GitLab/Bitbucket/Gitea, pre-commit hook, MCP server.">
+<meta property="og:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="gitl — documentation">
+<meta name="twitter:description" content="Full gitl reference: commands, flags, exit codes, configuration (providers, cache, templates), CI integrations for GitHub/GitLab/Bitbucket/Gitea, pre-commit hook, MCP server.">
+<meta name="twitter:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="container">
+    <a class="logo" href="index.html"><span>&gt;</span> gitl</a>
+    <nav class="main">
+      <a href="index.html">Home</a>
+      <a href="use-cases.html">Use cases</a>
+      <a class="active" href="docs.html">Docs</a>
+      <a href="https://github.com/akomyagin/gitl">GitHub</a>
+    </nav>
+    <div class="lang"><span class="cur">EN</span> · <a href="ru/docs.html">RU</a></div>
+  </div>
+</header>
+
+<main class="container">
+
+<h1>Documentation</h1>
+<p class="subtitle">The full usage reference for gitl <code>v0.6.2</code>.
+Requires <code>git</code> in <code>PATH</code>; Go 1.22+ only for
+<code>go install</code> / building from source.</p>
+
+<div class="toc">
+<ul>
+  <li><a href="#install">Install</a></li>
+  <li><a href="#commands">Commands &amp; flags</a></li>
+  <li><a href="#exit-codes">Exit codes</a></li>
+  <li><a href="#completions">Shell completions</a></li>
+  <li><a href="#configuration">Configuration</a>
+    <ul>
+      <li><a href="#providers">Providers</a></li>
+      <li><a href="#streaming">Streaming</a></li>
+      <li><a href="#color">Color</a></li>
+      <li><a href="#quiet">Quiet mode</a></li>
+      <li><a href="#cache">Response cache</a></li>
+      <li><a href="#risk-trend">Risk trend</a></li>
+      <li><a href="#templates">Custom templates</a></li>
+    </ul>
+  </li>
+  <li><a href="#ci-integrations">CI integrations</a>
+    <ul>
+      <li><a href="#github-action">GitHub Action</a></li>
+      <li><a href="#gitea">Gitea Actions</a></li>
+      <li><a href="#gitlab">GitLab CI</a></li>
+      <li><a href="#bitbucket">Bitbucket Pipelines</a></li>
+    </ul>
+  </li>
+  <li><a href="#pre-commit">Pre-commit hook</a></li>
+  <li><a href="#mcp">MCP server</a></li>
+</ul>
+</div>
+
+<h2 id="install">Install</h2>
+
+<pre><code><span class="c"># Homebrew (macOS/Linux)</span>
+brew install akomyagin/tap/gitl
+
+<span class="c"># npm — downloads the prebuilt binary for your platform from GitHub Releases
+# and verifies its SHA256 checksum (no Go toolchain needed)</span>
+npx gitl-cli review HEAD~5..HEAD   <span class="c"># or: npm install -g gitl-cli</span>
+
+<span class="c"># Go toolchain</span>
+go install github.com/akomyagin/gitl/cmd/gitl@latest</code></pre>
+
+<p>Or download a signed release binary from
+<a href="https://github.com/akomyagin/gitl/releases">GitHub Releases</a> — every
+release is cosign-signed (keyless) and covered by SLSA L3 build provenance; the
+verification steps are in
+<a href="https://github.com/akomyagin/gitl/blob/master/VERIFY.md">VERIFY.md</a>.</p>
+
+<h2 id="commands">Commands &amp; flags</h2>
+
+<pre><code><span class="c"># AI review of a commit range — streams tokens to the terminal in real time</span>
+GITL_API_KEY=sk-... gitl review HEAD~5..HEAD
+
+<span class="c"># no key = deterministic offline review (heuristic risk, no network call)</span>
+gitl review HEAD~5..HEAD
+
+<span class="c"># review staged (not yet committed) changes before `git commit`</span>
+gitl review --staged
+
+<span class="c"># review a GitHub PR by number — requires the `gh` CLI (installed + authenticated);
+# resolves base/head via gh, fetches `pull/N/head` locally when needed, and reviews
+# the merge-base diff (base...head), same as GitHub shows</span>
+gitl review pr/42
+
+<span class="c"># machine-readable output for CI + risk gating</span>
+gitl review HEAD~5..HEAD --format=json
+gitl review HEAD~5..HEAD --fail-on=high   <span class="c"># exit code 2 on high risk</span>
+
+<span class="c"># estimate cost without making an API call</span>
+gitl review HEAD~5..HEAD --dry-run
+
+<span class="c"># cap the estimated cost of a run</span>
+gitl review HEAD~5..HEAD --max-cost-usd=0.50
+
+<span class="c"># skip the on-disk LLM cache (always call the model)</span>
+gitl review HEAD~5..HEAD --no-cache
+
+<span class="c"># disable streaming (non-interactive, buffered output)</span>
+gitl review HEAD~5..HEAD --no-stream
+
+<span class="c"># suppress the informational offline-mode notice on stderr
+# (also via GITL_QUIET=1 or output.quiet: true)</span>
+gitl review HEAD~5..HEAD --quiet
+
+<span class="c"># changelog from last tag (or full history if no tags) — no LLM by default</span>
+gitl changelog
+gitl changelog v1.2.0..HEAD --format=json
+
+<span class="c"># AI changelog: rewrites the grouped result as release-note prose; falls back
+# to the deterministic changelog without a key — never fails</span>
+GITL_API_KEY=sk-... gitl changelog --ai
+
+<span class="c"># activity summary for the last N days — no LLM</span>
+gitl digest --days=14
+
+<span class="c"># multi-repo digest: runs in parallel; one unreachable repo doesn't fail the rest</span>
+gitl digest --repos=../service-a,../service-b --format=json
+
+<span class="c"># interactive TUI viewer for digest (requires a TTY)</span>
+gitl digest --days=14 --tui
+
+<span class="c"># write a commented starter .gitl.yaml to the repo root</span>
+gitl init
+
+gitl version
+gitl --help</code></pre>
+
+<p>All three commands support <code>--format=md|text|json</code>. A custom
+review system prompt is set via config only
+(<code>prompt.system_template_file</code>); there is no
+<code>--system-template</code> flag — see
+<a href="#templates">Custom templates</a>.</p>
+
+<h2 id="exit-codes">Exit codes</h2>
+
+<table>
+<tr><th>Code</th><th>Meaning</th></tr>
+<tr><td><code>0</code></td><td>ok — risk below the <code>--fail-on</code> threshold (or no gate set)</td></tr>
+<tr><td><code>1</code></td><td>tool/runtime error — git, LLM, or config failure</td></tr>
+<tr><td><code>2</code></td><td>the <code>--fail-on</code> risk gate triggered — CI can branch on exactly this</td></tr>
+</table>
+
+<h2 id="completions">Shell completions</h2>
+
+<p>gitl ships cobra-generated completions for bash, zsh, fish, and PowerShell.
+Homebrew installs bash/zsh/fish completions automatically (release archives also
+carry them under <code>completions/</code>). Otherwise:</p>
+
+<pre><code><span class="c"># bash (current shell)</span>
+source &lt;(gitl completion bash)
+<span class="c"># bash (persistent) — Linux</span>
+gitl completion bash &gt; /etc/bash_completion.d/gitl
+<span class="c"># zsh (persistent)</span>
+gitl completion zsh &gt; "${fpath[1]}/_gitl"
+<span class="c"># fish</span>
+gitl completion fish &gt; ~/.config/fish/completions/gitl.fish
+<span class="c"># PowerShell</span>
+gitl completion powershell | Out-String | Invoke-Expression</code></pre>
+
+<p>Flags with fixed value sets — <code>--format</code> (md|text|json),
+<code>--fail-on</code> (never|low|medium|high), and <code>--provider</code> —
+complete their allowed values.</p>
+
+<h2 id="configuration">Configuration</h2>
+
+<p>The fast path: <code>gitl init</code> writes a commented starter
+<code>.gitl.yaml</code> to the repo root (refusing to overwrite an existing one
+without <code>--force</code>; <code>--output</code> writes elsewhere).</p>
+
+<p>Two levels, merged by priority:
+<strong>flag &gt; env &gt; <code>.gitl.yaml</code> (repo) &gt;
+<code>~/.config/gitl/config.yaml</code> (personal)</strong>.
+The repo-level <code>.gitl.yaml</code> is committed as a shared team policy
+(risk threshold, excluded paths, changelog categories). Without a key, gitl runs
+in deterministic offline mode.</p>
+
+<p>In offline mode — or when a real model omits a valid risk block and gitl
+falls back to the heuristic — the risk header is annotated with
+<code>*(heuristic)*</code> (and <code>"heuristic": true</code> in
+<code>--format=json</code>), so a deterministic score is never mistaken for a
+model's own judgement.</p>
+
+<h3 id="providers">Providers (<code>llm.provider</code>)</h3>
+
+<pre><code><span class="c"># OpenAI-compatible API (default)</span>
+llm:
+  provider: "openai"
+  api_key: ""            <span class="c"># or env GITL_API_KEY</span>
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o-mini"
+
+<span class="c"># Ollama — local/self-hosted, no key, free</span>
+llm:
+  provider: "ollama"
+  base_url: "http://localhost:11434/v1"
+  model: "llama3.1"
+
+<span class="c"># Azure OpenAI — custom auth/endpoint format</span>
+llm:
+  provider: "azure_openai"
+  api_key: ""             <span class="c"># or env GITL_API_KEY</span>
+  model: "gpt-4o-mini"    <span class="c"># used only for cost estimation</span>
+  azure_openai:
+    endpoint: "https://&lt;resource&gt;.openai.azure.com"
+    deployment: "&lt;deployment-name&gt;"
+    api_version: "2024-08-01-preview"
+
+<span class="c"># Anthropic (native Claude Messages API)</span>
+llm:
+  provider: "anthropic"
+  api_key: ""            <span class="c"># or env GITL_API_KEY</span>
+  model: "claude-sonnet-4-6"
+  <span class="c"># base_url optional; defaults to https://api.anthropic.com</span>
+
+<span class="c"># Google Gemini (Google AI Studio)</span>
+llm:
+  provider: "gemini"
+  api_key: ""            <span class="c"># or env GITL_API_KEY</span>
+  model: "gemini-2.5-flash"
+  <span class="c"># base_url optional; defaults to https://generativelanguage.googleapis.com/v1beta</span></code></pre>
+
+<h3 id="streaming">Streaming (<code>output.stream</code>)</h3>
+
+<p>When reviewing interactively (<code>md</code> or <code>text</code> format on
+a TTY), gitl streams tokens to the terminal as they arrive. Streaming is on by
+default and switches off automatically in CI (non-TTY stdout), with
+<code>--format=json</code>, and when a custom <code>output.template_file</code>
+is configured (the template needs the complete response, so the review is
+buffered and rendered through it instead).</p>
+
+<p>Streaming is currently implemented <strong>only for the OpenAI-compatible
+provider</strong> (<code>openai</code> / <code>ollama</code> /
+<code>azure_openai</code>). With the native <code>anthropic</code> or
+<code>gemini</code> provider, gitl transparently produces the same review as a
+single buffered response regardless of <code>output.stream</code> /
+<code>--no-stream</code>.</p>
+
+<pre><code>output:
+  stream: true   <span class="c"># default; set false to always buffer</span></code></pre>
+
+<h3 id="color">Color (<code>output.color</code>)</h3>
+
+<p>On an interactive terminal, <code>gitl review</code> colorizes the risk level
+in the header (HIGH red, MEDIUM yellow, LOW green). Color switches off
+automatically when stdout is not a TTY and never appears in
+<code>--format=json</code> output. Precedence, highest first:</p>
+
+<ol>
+<li><code>NO_COLOR</code> env var set (any value, even empty) — color off
+(<a href="https://no-color.org">no-color.org</a>);</li>
+<li><code>output.color: false</code> in config (or
+<code>GITL_OUTPUT_COLOR=false</code>) — color off;</li>
+<li>stdout is not a TTY — color off;</li>
+<li>otherwise — color on.</li>
+</ol>
+
+<h3 id="quiet">Quiet mode (<code>output.quiet</code>)</h3>
+
+<p>Without an API key, <code>review</code> prints an informational "using
+deterministic offline review" notice to stderr on every run (and
+<code>changelog --ai</code> prints an analogous fallback notice). Suppress it
+with any of:</p>
+
+<ol>
+<li>the <code>--quiet</code> flag on <code>review</code> / <code>changelog</code>;</li>
+<li>the <code>GITL_QUIET</code> env var set (any value, even empty);</li>
+<li><code>output.quiet: true</code> in config (or
+<code>GITL_OUTPUT_QUIET=true</code>).</li>
+</ol>
+
+<p><code>--quiet</code> only silences the informational banner: errors, the
+rendered review/changelog on stdout, and the <code>--fail-on</code> gate are
+never affected.</p>
+
+<h3 id="cache">LLM response cache (<code>cache</code>)</h3>
+
+<p><code>gitl review</code> caches model responses on disk (SHA-256 of provider
++ model + prompt) under <code>~/.cache/gitl/review/</code> (XDG-compliant).
+Identical diffs reuse the cached result instantly, with no API call or cost.</p>
+
+<pre><code>cache:
+  enabled: true    <span class="c"># default</span>
+  ttl_hours: 24    <span class="c"># entries older than this are ignored</span></code></pre>
+
+<p>Disable per-call with <code>--no-cache</code>. In <code>--format=json</code>
+every review artifact carries additive run metadata:
+<code>duration_ms</code> (wall-clock of the run) and
+<code>cache: { "hit": bool, "tier": "none|local|tiered" }</code> —
+<code>tier</code> reports the configured cache topology, not which backend
+served a particular hit.</p>
+
+<h4>Shared remote cache (<code>cache.remote</code>) — opt-in</h4>
+
+<p>Off by default, BYO-backend: gitl never hosts a service and makes no network
+request to any cache until you configure one. Useful for CI cold starts — a
+shared HTTP KV endpoint lets one runner reuse another's review of the same
+diff.</p>
+
+<pre><code>cache:
+  enabled: true
+  ttl_hours: 24
+  remote:                     <span class="c"># opt-in shared cache for CI cold starts</span>
+    url: https://cache.example.com/gitl   <span class="c"># your endpoint; gitl hosts nothing</span>
+    token_env: GITL_REMOTE_CACHE_TOKEN    <span class="c"># env var holding an optional bearer token</span>
+    timeout_ms: 3000</code></pre>
+
+<p>The local disk cache stays the first tier: reads check disk, then the remote
+(a remote hit is backfilled to disk); writes go to both. The protocol is a dumb
+key-value store over HTTP: <code>GET {url}/{key}</code> → 200 with the JSON
+entry or 404 = miss; <code>PUT {url}/{key}</code> with the JSON entry → any 2xx
+= stored. If <code>token_env</code> names an env var with a non-empty value,
+both requests carry <code>Authorization: Bearer</code>. Keys are 64-char hex
+SHA-256 strings.</p>
+
+<p><strong>Safety contract:</strong> any remote failure silently degrades to the
+local cache — it never fails the review. Entries contain only the model's
+response, keyed by an opaque hash: no diff and no prompt text ever reach the
+remote cache.</p>
+
+<h3 id="risk-trend">Risk trend (<code>policy.risk_log_enabled</code>)</h3>
+
+<p>Every <code>gitl review</code> run appends its risk outcome to a local JSONL
+log (<code>~/.local/share/gitl/risk-history.jsonl</code>;
+<code>%AppData%\gitl\</code> on Windows). <code>gitl digest</code> reads it back
+and shows a per-repo "Risk trend (last N days)" section — review count by level,
+high-risk direction, and the last few reviews. In <code>--format=json</code>
+it's the optional <code>risk_trend</code> field. Reviews are correlated with a
+repository by its <code>origin</code> remote URL (falling back to the worktree
+path).</p>
+
+<div class="callout warn">The history is <strong>local to your machine</strong> —
+it does not persist across CI runners, so the trend is a feature for local
+developer use, not for CI.</div>
+
+<pre><code>policy:
+  risk_log_enabled: false   <span class="c"># opt out (config only, no CLI flag)</span></code></pre>
+
+<h3 id="templates">Custom templates</h3>
+
+<p>Three independent, config-only overrides (no CLI flags):</p>
+
+<ul>
+<li><strong><code>prompt.system_template_file</code></strong> — your own review
+system prompt (security checklist, architecture constraints, team rules). Used
+only by <code>gitl review</code>; the template has access to
+<code>{{ .Commits }}</code>, <code>{{ .Diff }}</code>, <code>{{ .Range }}</code>,
+<code>{{ .Staged }}</code>.</li>
+<li><strong><code>prompt.changelog_system_template_file</code></strong> — your
+own changelog system prompt, used only by <code>gitl changelog --ai</code>; it
+gets <code>{{ .Commits }}</code>, <code>{{ .Range }}</code>,
+<code>{{ .Grouped }}</code> — <em>not</em> <code>{{ .Diff }}</code>
+(<code>changelog --ai</code> works from commit metadata; there is no diff).</li>
+<li><strong><code>output.template_file</code></strong> — your own
+<code>md</code>-format render template for the finished review artifact.</li>
+</ul>
+
+<pre><code>prompt:
+  system_template_file: "./review-policy.md"             <span class="c"># path relative to CWD</span>
+  changelog_system_template_file: "./changelog-policy.md"
+output:
+  template_file: "./review-output.tmpl"</code></pre>
+
+<div class="callout warn"><strong>Trust note:</strong> these keys can be set by
+a repo-level <code>.gitl.yaml</code>, so running <code>gitl review</code>
+against a cloned repository you don't control can point it at a template inside
+that same repository. <code>text/template</code> here can't read arbitrary files
+or execute code, but treat an untrusted repo's <code>.gitl.yaml</code> with the
+same caution you'd give its <code>.git/hooks</code> or build scripts.</div>
+
+<h2 id="ci-integrations">CI integrations</h2>
+
+<h3 id="github-action">GitHub Action</h3>
+
+<p>The Action AI-reviews a pull request's commits and posts a sticky comment
+with the risk score, optionally blocking merge above a threshold. It builds gitl
+from source (<code>go install</code> at a pinned version).</p>
+
+<pre><code>name: gitl review
+on:
+  pull_request:
+
+permissions:
+  contents: read          <span class="c"># for checkout</span>
+  pull-requests: write    <span class="c"># to post the review comment</span>
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0    <span class="c"># required: without full history base..head won't resolve</span>
+
+      - uses: akomyagin/gitl@v0.6.2
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   <span class="c"># BYOK</span>
+          fail-on: high                               <span class="c"># optional: block merge on high risk</span></code></pre>
+
+<p>Key points:</p>
+<ul>
+<li><strong>Key via <code>secrets.*</code> only.</strong> If the secret is not
+set, the Action runs in deterministic offline mode (no network, no cost).</li>
+<li><strong>Minimal permissions.</strong> Only <code>pull-requests: write</code>
+and <code>contents: read</code> are needed.</li>
+<li><strong><code>fetch-depth: 0</code> is required</strong> — a shallow clone
+won't resolve <code>base.sha..head.sha</code>.</li>
+<li><strong><code>fail-on</code> defaults to <code>never</code></strong> — the
+Action only comments unless you opt into the gate. When the gate triggers, the
+job fails with exit code <code>2</code>; a genuine tool error fails with
+<code>1</code>.</li>
+<li><strong>Provider selection.</strong> Pass <code>provider:</code>
+(<code>openai</code>|<code>ollama</code>|<code>azure_openai</code>|<code>anthropic</code>|<code>gemini</code>),
+and optionally <code>model:</code> and <code>base-url:</code>, alongside
+<code>gitl-api-key:</code>. When omitted, they fall through to your
+<code>.gitl.yaml</code>/personal config and gitl's defaults.</li>
+<li><strong>Diff privacy.</strong> In CI the diff is sent to whichever LLM
+provider is configured. For private code, use a self-hosted/enterprise provider
+(Ollama, Azure OpenAI).</li>
+<li><strong>PR description summary (opt-in).</strong> With
+<code>update-pr-description: true</code> (default <code>false</code>) the Action
+also maintains a compact risk-summary block at the end of the PR description,
+delimited by a marker pair — only the text between the markers is ever
+replaced. GitHub-only.</li>
+</ul>
+
+<h3 id="gitea">Gitea Actions (experimental)</h3>
+
+<p>The same <code>action.yml</code> runs on Gitea Actions — the platform is
+detected at run time via the <code>GITEA_ACTIONS=true</code> variable, and the
+sticky comment is posted through Gitea's REST API with <code>curl</code> instead
+of the <code>gh</code> CLI.</p>
+
+<pre><code>name: gitl review
+on:
+  pull_request:
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: https://github.com/actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: https://github.com/akomyagin/gitl@v0.6.2
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   <span class="c"># BYOK; omit for offline mode</span></code></pre>
+
+<p>Requirements: Actions enabled, a recent act_runner (node24-capable), and a
+runner image providing <code>bash</code>, <code>git</code>, <code>curl</code>,
+<code>jq</code> and node. The REST-call path was verified end-to-end against a
+real Gitea instance; the surrounding act_runner CI context is still
+experimental — bug reports from real instances are very welcome.</p>
+
+<h3 id="gitlab">GitLab CI (experimental)</h3>
+
+<p>gitl ships a GitLab CI/CD component mirroring the GitHub Action: it reviews
+the merge request's range and creates/updates a sticky MR note. On gitlab.com,
+include it as a catalog component:</p>
+
+<pre><code><span class="c"># .gitlab-ci.yml (gitlab.com)</span>
+include:
+  - component: gitlab.com/alkom68/gitl/gitl-review@v0.6.2
+    inputs:
+      fail_on: "never"      <span class="c"># default; set "high" to block risky MRs</span></code></pre>
+
+<p>On a self-hosted GitLab instance, consume the template via
+<code>include:remote</code> straight from GitHub:</p>
+
+<pre><code><span class="c"># .gitlab-ci.yml (self-hosted GitLab)</span>
+include:
+  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.6.2/templates/gitl-review.yml"
+    inputs:
+      fail_on: "never"</code></pre>
+
+<p>Setup — two CI/CD variables (both masked, never in YAML):
+<code>GITL_API_KEY</code> (optional; without it gitl runs the offline review)
+and <code>GITL_GITLAB_TOKEN</code> (project access token or PAT,
+<code>api</code> scope, Reporter+, for posting the MR note — the
+<code>CI_JOB_TOKEN</code> fallback is usually not authorized for the Notes
+API). The REST calls and component YAML were verified against a real GitLab CE
+instance; a live pipeline run is still experimental.</p>
+
+<h3 id="bitbucket">Bitbucket Pipelines (experimental)</h3>
+
+<p>The Bitbucket integration is a Pipe — a self-contained Docker image
+(<code>alkom68/gitl-review-pipe</code> on Docker Hub, published since
+<code>v0.5.2</code>) that resolves the PR range, runs
+<code>gitl review --format=json</code>, and creates/updates a sticky PR
+comment.</p>
+
+<pre><code><span class="c"># bitbucket-pipelines.yml</span>
+pipelines:
+  pull-requests:
+    '**':
+      - step:
+          name: gitl review
+          clone:
+            depth: full   <span class="c"># the default depth-50 clone may not contain the PR base</span>
+          script:
+            - pipe: docker://alkom68/gitl-review-pipe:0.6.2
+              variables:
+                GITL_API_KEY: $GITL_API_KEY                    <span class="c"># BYOK; omit for offline review</span>
+                GITL_BITBUCKET_TOKEN: $GITL_BITBUCKET_TOKEN    <span class="c"># posts the PR comment</span>
+                <span class="c"># FAIL_ON: "high"        # default "never" — comment only, no gate</span></code></pre>
+
+<p>Setup — two secured repository/workspace variables:
+<code>GITL_API_KEY</code> (optional) and <code>GITL_BITBUCKET_TOKEN</code> (an
+access token with the <code>pullrequest:write</code> scope; alternatively
+<code>GITL_BITBUCKET_USER</code> + <code>GITL_BITBUCKET_APP_PASSWORD</code> for
+Basic auth). The pipe executes nothing fetched at run time — the binary and
+scripts are baked into the versioned image. The in-container flow was verified
+against a mock of the Bitbucket API; the live-pipeline path is still
+experimental.</p>
+
+<h2 id="pre-commit">Pre-commit hook</h2>
+
+<p>gitl ships a <a href="https://pre-commit.com/">pre-commit</a> framework hook
+so that <code>gitl review --staged --quiet</code> runs before every commit —
+locally, offline, and at zero cost by default.</p>
+
+<pre><code>repos:
+  - repo: https://github.com/akomyagin/gitl
+    rev: v0.6.2   <span class="c"># pin to a released tag</span>
+    hooks:
+      - id: gitl-review</code></pre>
+
+<p>then run <code>pre-commit install</code>. The framework builds the gitl
+binary itself (<code>language: golang</code>) and caches the environment, so the
+build cost is paid once. To opt into a blocking hook with a cost cap:</p>
+
+<pre><code>hooks:
+  - id: gitl-review
+    args: [--fail-on=high, --max-cost-usd=0.05]</code></pre>
+
+<p>A plain git hook works too:</p>
+
+<pre><code><span class="c"># .git/hooks/pre-commit  (chmod +x)</span>
+#!/usr/bin/env bash
+set -euo pipefail
+gitl review --staged --quiet || true
+<span class="c"># to block the commit on high risk instead:
+#   gitl review --staged --quiet --fail-on=high</span></code></pre>
+
+<h2 id="mcp">MCP server</h2>
+
+<p><code>gitl mcp</code> runs gitl as a
+<a href="https://modelcontextprotocol.io">Model Context Protocol</a> stdio
+server, for using gitl interactively inside an agent session (Claude Desktop,
+Cursor, Windsurf, etc.) instead of shelling out. It exposes two tools:</p>
+
+<ul>
+<li><strong><code>gitl_review</code></strong> — same engine as
+<code>gitl review</code>: <code>range</code>/<code>pr</code>/<code>staged</code>
+(exactly one), optional per-call <code>model</code> override. Provider and
+endpoint are fixed at server startup by design: the tool caller is an AI agent,
+which can be steered by prompt injection inside the reviewed content — a
+per-call <code>base_url</code> would let a malicious commit redirect the request
+and leak the real API key. Always returns the structured JSON artifact;
+<code>risk.level</code> is returned as data (there is no <code>--fail-on</code>
+in MCP mode — no process exit code to gate).</li>
+<li><strong><code>gitl_digest</code></strong> — same as <code>gitl digest</code>:
+<code>days</code> (default 7), optional <code>repos</code>. Without an explicit
+<code>repos</code> argument the tool only digests the server's working directory
+(plus <code>digest.repos</code> from <code>.gitl.yaml</code>) — it never walks
+arbitrary paths on its own initiative.</li>
+</ul>
+
+<pre><code>{
+  "mcpServers": {
+    "gitl": {
+      "command": "gitl",
+      "args": ["mcp"]
+    }
+  }
+}</code></pre>
+
+<p>Config is loaded once at startup the same way as the plain commands. Without
+a key, tool calls run in the same deterministic offline mode as the CLI.
+<code>stdout</code> is reserved for the MCP protocol; warnings go to stderr.</p>
+
+</main>
+
+<footer class="site">
+  <div class="container">
+    <a href="https://github.com/akomyagin/gitl">gitl on GitHub</a> ·
+    <a href="https://github.com/akomyagin/gitl/blob/master/LICENSE">MIT license</a> ·
+    no telemetry, ever
+  </div>
+</footer>
+
+</body>
+</html>

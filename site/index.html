@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gitl — AI code review for your CI, with a risk score you can gate on</title>
+<meta name="description" content="gitl reads a commit range and produces an AI review with a machine-readable risk level, a deterministic changelog, and a multi-repo digest. One Go binary, BYOK, no telemetry, works fully offline.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://akomyagin.github.io/gitl/">
+<meta property="og:title" content="gitl — AI code review for your CI, with a risk score you can gate on">
+<meta property="og:description" content="gitl reads a commit range and produces an AI review with a machine-readable risk level, a deterministic changelog, and a multi-repo digest. One Go binary, BYOK, no telemetry, works fully offline.">
+<meta property="og:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="gitl — AI code review for your CI, with a risk score you can gate on">
+<meta name="twitter:description" content="gitl reads a commit range and produces an AI review with a machine-readable risk level, a deterministic changelog, and a multi-repo digest. One Go binary, BYOK, no telemetry, works fully offline.">
+<meta name="twitter:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<link rel="stylesheet" href="assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="container">
+    <a class="logo" href="index.html"><span>&gt;</span> gitl</a>
+    <nav class="main">
+      <a class="active" href="index.html">Home</a>
+      <a href="use-cases.html">Use cases</a>
+      <a href="docs.html">Docs</a>
+      <a href="https://github.com/akomyagin/gitl">GitHub</a>
+    </nav>
+    <div class="lang"><span class="cur">EN</span> · <a href="ru/index.html">RU</a></div>
+  </div>
+</header>
+
+<main class="container">
+
+<h1>AI code review for your CI,<br>with a risk score you can gate merges on</h1>
+<p class="tagline">Your key, any provider, or fully offline.</p>
+<p class="subtitle"><code>gitl</code> (git-log-lens) reads a commit range and turns it
+into a structured engineering artifact: an AI review with a machine-readable risk
+level, a deterministic changelog, and a multi-repo activity digest — one Go binary,
+no server, no database.</p>
+
+<figure class="demo">
+  <img src="assets/demo-review.gif" alt="gitl review streaming a risk score in the terminal">
+  <figcaption><code>gitl review</code> — AI review of a commit range with a
+  machine-readable risk level. Without a key it falls back to a deterministic
+  offline heuristic — no network, no cost.</figcaption>
+</figure>
+
+<h2>Install</h2>
+
+<pre><code><span class="c"># Homebrew (macOS/Linux)</span>
+brew install akomyagin/tap/gitl
+
+<span class="c"># npm — downloads the prebuilt, checksum-verified binary for your platform</span>
+npx gitl-cli review HEAD~5..HEAD        <span class="c"># or: npm install -g gitl-cli</span>
+
+<span class="c"># Go toolchain</span>
+go install github.com/akomyagin/gitl/cmd/gitl@latest</code></pre>
+
+<div class="callout">
+<strong>Signed releases (cosign keyless + SLSA L3 provenance), no telemetry,
+BYOK — your API key never leaves your machine.</strong> Verify any release before
+you run it: <a href="https://github.com/akomyagin/gitl/blob/master/VERIFY.md">VERIFY.md</a>.
+</div>
+
+<h2>Three commands, one binary</h2>
+
+<div class="features">
+  <div class="feature">
+    <h3>gitl review</h3>
+    <p>AI review of a commit range, PR, or staged changes with a machine risk
+    level (low / medium / high). <code>--fail-on=high</code> exits with code 2 —
+    a contract your CI can branch on. Streams tokens live; caches responses on
+    disk.</p>
+  </div>
+  <div class="feature">
+    <h3>gitl changelog</h3>
+    <p>Keep-a-Changelog output grouped by conventional commits — deterministic by
+    default, <code>--ai</code> rewrites it as release-note prose and falls back
+    cleanly without a key. Never fails.</p>
+  </div>
+  <div class="feature">
+    <h3>gitl digest</h3>
+    <p>Activity summary by author, topic, and file across multiple repositories
+    in parallel — with an interactive TUI viewer (<code>--tui</code>).</p>
+  </div>
+</div>
+
+<p>It's also an MCP server (<code>gitl mcp</code>) and ships CI wrappers for
+GitHub Actions, GitLab, Bitbucket, and Gitea — see the
+<a href="docs.html">full documentation</a>.</p>
+
+<h2>Try it in two minutes</h2>
+
+<pre><code><span class="c"># AI review of a commit range (streams to the terminal)</span>
+GITL_API_KEY=sk-... gitl review HEAD~5..HEAD
+
+<span class="c"># no key = deterministic offline review (heuristic risk, no network)</span>
+gitl review HEAD~5..HEAD
+
+<span class="c"># machine-readable + CI gate</span>
+gitl review HEAD~5..HEAD --format=json --fail-on=high   <span class="c"># exit 2 on high risk</span></code></pre>
+
+<p>Exit codes are part of the contract: <code>0</code> — ok, <code>1</code> —
+tool/runtime error, <code>2</code> — the <code>--fail-on</code> risk gate
+triggered.</p>
+
+<p>
+<a class="cta" href="https://github.com/akomyagin/gitl">★ Star on GitHub</a>
+&nbsp;&nbsp;<a href="use-cases.html">See the use cases →</a>
+</p>
+
+</main>
+
+<footer class="site">
+  <div class="container">
+    <a href="https://github.com/akomyagin/gitl">gitl on GitHub</a> ·
+    <a href="https://github.com/akomyagin/gitl/blob/master/LICENSE">MIT license</a> ·
+    no telemetry, ever
+  </div>
+</footer>
+
+</body>
+</html>
