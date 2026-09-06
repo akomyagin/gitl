@@ -10,6 +10,8 @@ This package contains no code of its own: on install it downloads the
 prebuilt `gitl` binary for your platform from the project's GitHub
 Releases and verifies its SHA256 checksum.
 
+![gitl review streaming a risk score](https://raw.githubusercontent.com/akomyagin/gitl/master/site/assets/demo-review.gif)
+
 ```bash
 npx gitl-cli review HEAD~5..HEAD
 
@@ -19,6 +21,8 @@ gitl review HEAD~5..HEAD
 ```
 
 Full documentation, configuration reference, and sources:
-<https://github.com/akomyagin/gitl>.
+<https://github.com/akomyagin/gitl>. Use cases and a full command/config
+reference are also on the
+[documentation site](https://akomyagin.github.io/gitl/docs.html).
 
 License: MIT.

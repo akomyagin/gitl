@@ -22,7 +22,12 @@
     "code-review",
     "changelog",
     "cli",
-    "llm"
+    "llm",
+    "github-action",
+    "pr-review",
+    "risk-score",
+    "devops",
+    "ci"
   ],
   "author": "Alexander Komyagin",
   "license": "MIT"
