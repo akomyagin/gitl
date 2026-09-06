@@ -1,834 +1,145 @@
 # gitl
 
+**AI-ревью кода для вашего CI с риск-скором, по которому можно гейтить merge — ваш ключ, любой провайдер или полностью офлайн.**
+
+`gitl` (git-log-lens) читает диапазон коммитов и превращает его в структурированный
+инженерный артефакт: AI-ревью с машиночитаемым уровнем риска, детерминированный
+changelog и сводку активности по нескольким репозиториям — один Go-бинарник,
+без сервера и без базы данных.
+
+[![CI](https://github.com/akomyagin/gitl/actions/workflows/ci.yml/badge.svg)](https://github.com/akomyagin/gitl/actions/workflows/ci.yml)
 [![Action self-test](https://github.com/akomyagin/gitl/actions/workflows/action-selftest.yml/badge.svg)](https://github.com/akomyagin/gitl/actions/workflows/action-selftest.yml)
+[![Последний релиз](https://img.shields.io/github/v/release/akomyagin/gitl)](https://github.com/akomyagin/gitl/releases)
+[![Лицензия MIT](https://img.shields.io/github/license/akomyagin/gitl)](LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/akomyagin/gitl.svg)](https://pkg.go.dev/github.com/akomyagin/gitl)
+[![Подписанные релизы](https://img.shields.io/badge/releases-signed%20(cosign%20%C2%B7%20SLSA%20L3)-blueviolet)](VERIFY.md)
 
-**AI-ревьюер git-истории для CLI и CI.** `gitl` (git-log-lens) читает git-историю
-репозитория и через LLM превращает её в структурированный инженерный артефакт:
+![gitl review — риск-скор в терминале](site/assets/demo-review.gif)
 
-- **`gitl review <range>`** — AI-ревью диапазона/PR с машиночитаемым риск-скорингом
-  (`low|medium|high`) для гейтинга в CI (`--fail-on=high` → exit code 2);
-  стримит токены в терминал в реальном времени; дисковый кэш LLM-ответов
-  с опциональным общим remote-кэшем для CI;
-  кастомные системные шаблоны промптов; `--staged` — ревью staged (ещё не
-  закоммиченных) изменений перед `git commit` (доступно и как
-  [pre-commit-хук](#pre-commit-хук-локально)).
-- **`gitl changelog [<range>]`** — changelog в стиле Keep a Changelog, группировка
-  по conventional-commits (по умолчанию — диапазон от последнего тега до `HEAD`);
-  детерминированный по умолчанию, `--ai` опционально переписывает его моделью
-  в читаемую прозу release notes;
-- **`gitl digest [--days=N] [--repos=a,b,c]`** — сводка активности по авторам/темам/
-  файлам, в т.ч. по **нескольким репозиториям параллельно**; интерактивный TUI (`--tui`).
+*`gitl review` — AI-ревью диапазона коммитов с машиночитаемым уровнем риска
+прямо в терминале.*
 
-Чистый CLI-бинарник плюс GitHub Action-обёртка — без сервера, БД и хостинга ключей.
-**BYOK** (bring your own key) и мультипровайдерность: OpenAI-совместимый API,
-Ollama (локально/self-hosted), Azure OpenAI, нативный Anthropic (Claude),
-Google Gemini. Без телеметрии.
+## Зачем
 
-> **Статус:** выпущен `v0.6.2` — все три команды работают на реальных репозиториях,
-> все три формата вывода (`md|text|json`); Action оставляет AI-ревью sticky-комментарием
-> к PR и гейтит по риск-скорингу. Релизные бинари кросс-компилированы, подписаны cosign
-> и покрыты SLSA L3 provenance (верификация — в [VERIFY.md](VERIFY.md)).
+Почти все AI-ревьюеры — это SaaS: ваш дифф уезжает на чужой сервер, а обратно
+приходит комментарий, а не контракт. Мне хотелось наоборот — CLI/CI-инструмент,
+где ревью делается **моим ключом у моего провайдера (или вообще без провайдера)
+и даёт уровень риска, по которому CI может ветвиться**. Один бинарник закрывает
+три задачи, под которые обычно ставят три разных инструмента: ревью с
+риск-гейтом, changelog и мульти-репо дайджест. Телеметрии нет, ключи нигде не
+хостятся, а без ключа всё продолжает работать: детерминированная офлайн-эвристика
+держит CI зелёным и бесплатным.
 
-## Быстрый старт
-
-Требуется **Go 1.22+** и системный **git** в `PATH`.
+## Установка
 
 ```bash
-# собрать
-go build ./...
-
-# AI-ревью диапазона коммитов — токены стримятся в терминал в реальном времени
-GITL_API_KEY=sk-... go run ./cmd/gitl review HEAD~5..HEAD
-
-# без ключа — детерминированный offline-обзор (эвристика, без сети)
-go run ./cmd/gitl review HEAD~5..HEAD
-
-# ревью staged (ещё не закоммиченных) изменений перед `git commit`
-go run ./cmd/gitl review --staged
-
-# ревью GitHub PR по номеру — требуется `gh` CLI (установлен + залогинен);
-# base/head резолвятся через gh, при необходимости делается локальный fetch
-# `pull/N/head`, ревьюится diff от merge-base (base...head) — как показывает GitHub
-go run ./cmd/gitl review pr/42
-
-# машиночитаемый вывод для CI + гейтинг по риску
-go run ./cmd/gitl review HEAD~5..HEAD --format=json
-go run ./cmd/gitl review HEAD~5..HEAD --fail-on=high   # exit code 2 при высоком риске
-# exit-коды: 0 = ок (риск ниже --fail-on), 1 = ошибка инструмента (git/LLM/
-# конфиг), 2 = сработал риск-гейт --fail-on — CI может ветвиться именно по 2
-
-# оценка стоимости без реального вызова API
-go run ./cmd/gitl review HEAD~5..HEAD --dry-run
-
-# кастомный системный промпт задаётся только через конфиг
-# (prompt.system_template_file), CLI-флага --system-template нет —
-# см. Конфигурация → Кастомные шаблоны ниже
-
-# пропустить дисковый кэш LLM-ответов (всегда вызывать модель)
-go run ./cmd/gitl review HEAD~5..HEAD --no-cache
-
-# отключить стриминг (буферизованный вывод)
-go run ./cmd/gitl review HEAD~5..HEAD --no-stream
-
-# подавить информационное уведомление об офлайн-режиме на stderr (ошибки и
-# сам вывод ревью не затрагиваются) — также через GITL_QUIET=1 или output.quiet: true
-go run ./cmd/gitl review HEAD~5..HEAD --quiet
-
-# changelog с последнего тега (или вся история, если тегов нет) — без LLM по умолчанию
-go run ./cmd/gitl changelog
-go run ./cmd/gitl changelog v1.2.0..HEAD --format=json
-
-# AI-changelog: модель переписывает сгруппированный результат в прозу release notes
-# и переносит значимые non-conventional коммиты из "Other" в подходящие категории.
-# Без API-ключа (или при некорректном ответе модели) — откат к детерминированному
-# changelog с предупреждением, команда никогда не падает. --dry-run/--max-cost-usd/
-# --no-cache работают так же, как у review.
-GITL_API_KEY=sk-... go run ./cmd/gitl changelog --ai
-
-# сводка активности за последние N дней — без LLM
-go run ./cmd/gitl digest --days=14
-
-# мульти-репо digest: собирается параллельно, один недоступный репозиторий
-# не валит остальные
-go run ./cmd/gitl digest --repos=../service-a,../service-b --format=json
-
-# интерактивный TUI-просмотрщик дайджеста (требует TTY)
-go run ./cmd/gitl digest --days=14 --tui
-
-go run ./cmd/gitl version
-go run ./cmd/gitl --help
-
-# тесты
-go test ./...
-```
-
-Установка:
-
-```bash
-# Go-тулчейн
-go install github.com/akomyagin/gitl/cmd/gitl@latest
-
 # Homebrew (macOS/Linux)
 brew install akomyagin/tap/gitl
 
-# npm — скачивает готовый бинарь под вашу платформу из GitHub Releases
-# и проверяет его SHA256-контрольную сумму (Go-тулчейн не нужен).
-npx gitl-cli review HEAD~5..HEAD   # или: npm install -g gitl-cli
+# npm — скачивает готовый бинарник под вашу платформу и сверяет контрольную сумму
+npx gitl-cli review HEAD~5..HEAD        # или: npm install -g gitl-cli
 
-# Либо подписанный релизный бинарь из GitHub Releases (см. VERIFY.md)
+# Go-тулчейн
+go install github.com/akomyagin/gitl/cmd/gitl@latest
 ```
 
-### Автодополнение (shell completions)
+Либо возьмите подписанный бинарник из [GitHub Releases](https://github.com/akomyagin/gitl/releases)
+(как проверить подпись — [VERIFY.md](VERIFY.md)). Нужен `git` в `PATH`;
+Go 1.22+ требуется только для `go install` / сборки из исходников.
 
-`gitl` поставляет cobra-сгенерированные скрипты автодополнения для bash, zsh,
-fish и PowerShell.
+> **Подписанные релизы (cosign keyless + SLSA L3 provenance), без телеметрии,
+> BYOK — ваш API-ключ никогда не покидает вашу машину.** Любой релиз можно
+> проверить до запуска: [VERIFY.md](VERIFY.md).
 
-Homebrew устанавливает автодополнение bash/zsh/fish автоматически (релизные
-архивы тоже содержат скрипты в `completions/`). Иначе — включите вручную:
+## Возможности
+
+- **`gitl review <range>`** — AI-ревью с машинным уровнем риска
+  (`low|medium|high`); `--fail-on=high` завершается кодом 2 — CI может гейтить
+  merge; токены стримятся в терминал; дисковый кэш ответов (плюс opt-in общий
+  remote-кэш для CI); `--staged` ревьюит незакоммиченные изменения; `pr/N`
+  ревьюит GitHub PR через `gh`.
+- **`gitl changelog [<range>]`** — changelog в стиле Keep a Changelog с
+  группировкой по conventional commits, детерминированный по умолчанию; `--ai`
+  переписывает его в прозу release notes, а без ключа откатывается к
+  детерминированному результату — команда никогда не падает.
+- **`gitl digest [--days=N] [--repos=a,b,c]`** — сводка активности по
+  авторам/темам/файлам по нескольким репозиториям параллельно, с интерактивным
+  TUI-просмотрщиком (`--tui`).
+
+Провайдеры (BYOK): OpenAI-совместимый API, Ollama (локально/self-hosted),
+Azure OpenAI, нативный Anthropic (Claude), Google Gemini — или вообще без
+провайдера.
+
+Кроме того, gitl — это MCP-сервер (`gitl mcp`) и CI-обёртки для GitHub Actions,
+GitLab, Bitbucket и Gitea — всё это описано на
+[сайте документации](https://akomyagin.github.io/gitl/ru/docs.html).
+
+## Быстрый старт
 
 ```bash
-# bash (текущая сессия)
-source <(gitl completion bash)
-# bash (постоянно) — Linux
-gitl completion bash > /etc/bash_completion.d/gitl
-# zsh (постоянно)
-gitl completion zsh > "${fpath[1]}/_gitl"
-# fish
-gitl completion fish > ~/.config/fish/completions/gitl.fish
-# PowerShell
-gitl completion powershell | Out-String | Invoke-Expression
+# AI-ревью диапазона коммитов (стримится в терминал)
+GITL_API_KEY=sk-... gitl review HEAD~5..HEAD
+
+# без ключа — детерминированное офлайн-ревью (эвристический риск, без сети)
+gitl review HEAD~5..HEAD
+
+# машиночитаемый вывод + CI-гейт
+gitl review HEAD~5..HEAD --format=json --fail-on=high   # exit 2 при высоком риске
+
+# changelog с последнего тега; дайджест активности за 14 дней
+gitl changelog
+gitl digest --days=14
 ```
 
-Флаги с фиксированным набором значений — `--format` (md|text|json), `--fail-on`
-(never|low|medium|high) и `--provider` — дополняются до допустимых значений.
+Exit-коды — часть контракта: `0` — ок, `1` — ошибка инструмента, `2` — сработал
+риск-гейт `--fail-on`. Полный справочник команд — на
+[сайте документации](https://akomyagin.github.io/gitl/ru/docs.html).
 
-### Локальный тест мультипровайдерности (Ollama)
+![gitl --fail-on=high роняет CI-проверку](site/assets/demo-gate.gif)
 
-`docker-compose.yml` поднимает **только dev-зависимость** — локальный Ollama
-для проверки мультипровайдерного LLM-клиента (сам `gitl` в контейнер не оборачивается):
+*`--fail-on=high` превращает высокорисковый диапазон в ненулевой exit-код (2),
+по которому CI может гейтить.*
 
-```bash
-docker compose up ollama
-```
+## Сценарии
 
-## Конфигурация
+- **Гейтить PR по AI-риску в CI** — GitHub Action оставляет sticky-комментарий с
+  ревью и роняет проверку выше вашего порога.
+- **Страховка перед коммитом** — `gitl review --staged` работает офлайн перед
+  каждым коммитом, бесплатно.
+- **Release notes одной командой** — `gitl changelog --ai`.
+- **Мульти-репо дайджест к стендапу** — `gitl digest --repos=… --tui`.
 
-Быстрый путь: `gitl init` записывает прокомментированный стартовый `.gitl.yaml`
-в корень репозитория (существующий файл не перезаписывает без `--force`;
-`--output` пишет в другое место). Отредактируйте его вместо копирования YAML
-из этого раздела — ниже полный справочник.
+Все сценарии разобраны от начала до конца на
+[странице сценариев](https://akomyagin.github.io/gitl/ru/use-cases.html).
 
-Два уровня, сливаются по приоритету:
-**флаг > env > `.gitl.yaml` (репо) > `~/.config/gitl/config.yaml` (личный)**.
-Repo-level `.gitl.yaml` коммитится в репозиторий как общая политика команды
-(порог риска, исключённые пути, категории changelog). Без ключа `gitl` работает
-в детерминированном offline-режиме.
+![gitl digest --tui — просмотр мульти-репо сводки](site/assets/demo-digest-tui.gif)
 
-В offline-режиме — а также когда реальная модель не вернула валидный risk-блок и
-`gitl` падает назад на эвристику — risk-шапка помечается суффиксом `*(heuristic)*`
-(и `"heuristic": true` в `--format=json`), чтобы детерминированную оценку нельзя
-было принять за собственное суждение модели.
+*`gitl digest --tui` — интерактивный просмотрщик сводки активности.*
 
-### Провайдеры (`llm.provider`)
+## Сравнение
 
-```yaml
-# OpenAI-совместимый API (дефолт)
-llm:
-  provider: "openai"
-  api_key: ""            # или env GITL_API_KEY
-  base_url: "https://api.openai.com/v1"
-  model: "gpt-4o-mini"
+| | BYOK / любой провайдер | Офлайн-режим | Машинный риск-скор → CI-гейт | Ревью + changelog + дайджест |
+|---|:---:|:---:|:---:|:---:|
+| **gitl** | ✓ | ✓ | ✓ | ✓ |
+| PR-Agent (Qodo) | ✓ | — | — | — |
+| CodeRabbit | — (SaaS) | — | — | — |
+| git-cliff | н/п (без LLM) | ✓ | — | только changelog |
 
-# Ollama — локально/self-hosted, без ключа, бесплатно
-llm:
-  provider: "ollama"
-  base_url: "http://localhost:11434/v1"
-  model: "llama3.1"
+Сравнение по состоянию на сентябрь 2026; поправки приветствуются.
 
-# Azure OpenAI — свой формат auth/endpoint
-llm:
-  provider: "azure_openai"
-  api_key: ""             # или env GITL_API_KEY
-  model: "gpt-4o-mini"    # используется только для оценки стоимости
-  azure_openai:
-    endpoint: "https://<resource>.openai.azure.com"
-    deployment: "<deployment-name>"
-    api_version: "2024-08-01-preview"
+## Документация
 
-# Anthropic (нативный Claude Messages API)
-llm:
-  provider: "anthropic"
-  api_key: ""            # или env GITL_API_KEY
-  model: "claude-sonnet-4-6"
-  # base_url необязателен; по умолчанию https://api.anthropic.com
+Полная документация, справочник конфигурации и разобранные сценарии — на
+**[сайте документации](https://akomyagin.github.io/gitl/ru/)** (есть и
+[английская версия](https://akomyagin.github.io/gitl/)).
 
-# Google Gemini (Google AI Studio)
-llm:
-  provider: "gemini"
-  api_key: ""            # или env GITL_API_KEY
-  model: "gemini-2.5-flash"
-  # base_url необязателен; по умолчанию https://generativelanguage.googleapis.com/v1beta
-```
+English README — [README.md](README.md).
 
-### Стриминг (`output.stream`)
+## Как поучаствовать
 
-При интерактивном ревью (`md` или `text` в TTY) `gitl` стримит токены в терминал
-по мере поступления — не нужно ждать полного ответа. Стриминг включён по умолчанию
-и автоматически отключается в CI (не-TTY stdout), с `--format=json`, а также при
-заданном кастомном `output.template_file` (шаблону нужен полный ответ, поэтому
-ревью буферизуется и рендерится через него).
-
-Стриминг сейчас реализован **только для OpenAI-совместимого провайдера**
-(`openai` / `ollama` / `azure_openai`). С нативным `anthropic` или `gemini`
-провайдером `gitl` прозрачно отдаёт то же ревью одним буферизованным ответом
-(без токен-за-токеном), независимо от `output.stream` / `--no-stream`.
-
-```yaml
-output:
-  stream: true   # по умолчанию; false — всегда буферизовать
-```
-
-Отключить для одного вызова: `gitl review HEAD~5..HEAD --no-stream`
-
-### Цвет (`output.color`)
-
-В интерактивном терминале `gitl review` подсвечивает уровень риска в заголовке
-(`HIGH` — красный, `MEDIUM` — жёлтый, `LOW` — зелёный). Цвет автоматически
-отключается, когда stdout не TTY (пайпы, CI-логи), и никогда не попадает в
-вывод `--format=json`. Приоритет, сверху вниз:
-
-1. установлена переменная окружения `NO_COLOR` (любое значение, даже пустое) —
-   цвет выключен ([no-color.org](https://no-color.org));
-2. `output.color: false` в конфиге (или `GITL_OUTPUT_COLOR=false`) — цвет выключен;
-3. stdout не TTY — цвет выключен;
-4. иначе — цвет включён.
-
-```yaml
-output:
-  color: true   # по умолчанию; false — отключить ANSI-цвет
-```
-
-### Тихий режим (`output.quiet`)
-
-Без API-ключа `review` печатает в stderr информационное уведомление «using
-deterministic offline review» при каждом запуске (а `changelog --ai` —
-аналогичное уведомление об откате). В заведомо офлайновых контекстах — прежде
-всего в pre-commit-хуке, который срабатывает на каждый коммит, — этот баннер
-превращается в шум. Подавить его можно любым из способов (каждый слой
-независимо включает подавление):
-
-1. флаг `--quiet` у `review` / `changelog`;
-2. установленная переменная окружения `GITL_QUIET` (любое значение, даже пустое);
-3. `output.quiet: true` в конфиге (или `GITL_OUTPUT_QUIET=true`).
-
-`--quiet` глушит только информационный баннер: ошибки, само ревью/changelog на
-stdout и гейт `--fail-on` не затрагиваются.
-
-```yaml
-output:
-  quiet: false   # по умолчанию; true — подавить офлайн-уведомления
-```
-
-### Кэш LLM-ответов (`cache`)
-
-`gitl review` кэширует ответы модели на диск (SHA-256 от провайдера + модели + промпта).
-Одинаковые диффы переиспользуют кэш мгновенно — без API-вызова и без стоимости.
-
-```yaml
-cache:
-  enabled: true    # по умолчанию
-  ttl_hours: 24    # записи старше этого игнорируются
-```
-
-Кэш хранится в `~/.cache/gitl/review/` (XDG-совместимо). Пропустить для одного вызова:
-`gitl review HEAD~5..HEAD --no-cache`
-
-В `--format=json` каждый артефакт ревью несёт аддитивные метаданные прогона
-(`schema_version` остаётся `1`; потребители без поддержки полей видят тот же
-документ плюс два новых ключа):
-
-```json
-{
-  "duration_ms": 1234,
-  "cache": { "hit": true, "tier": "local" }
-}
-```
-
-- `duration_ms` — wall-clock всего прогона ревью в миллисекундах (попадание в
-  кэш тоже даёт реальное, обычно крошечное, число).
-- `cache.hit` — было ли ревью отдано из кэша LLM-ответов вместо свежего
-  вызова модели.
-- `cache.tier` — конфигурация кэша, действовавшая в этом прогоне: `none`
-  (offline-режим, `--no-cache`, `cache.enabled: false` или `ttl_hours <= 0`),
-  `local` (только диск) или `tiered` (диск + remote). Это сконфигурированный
-  режим, а не бэкенд, который отдал конкретное попадание.
-
-Поля `usage` (счётчики токенов) намеренно нет: gitl пока не парсит usage из
-ответов провайдеров, а вечно пустое поле хуже отсутствующего. Оно появится —
-аддитивно, без смены версии схемы — когда парсинг usage будет реализован.
-
-#### Общий remote-кэш (`cache.remote`) — opt-in
-
-**Opt-in, выключен по умолчанию, BYO-backend:** gitl не хостит сервис и не делает
-ни одного сетевого запроса ни к какому кэшу, пока вы его не сконфигурируете.
-Полезен для холодных стартов в CI — каждый runner начинает с пустым диском, а
-общий HTTP KV endpoint позволяет одному runner'у переиспользовать ревью того же
-диффа, сделанное другим.
-
-```yaml
-cache:
-  enabled: true
-  ttl_hours: 24
-  remote:                     # opt-in общий кэш для холодных стартов CI (выключен по умолчанию)
-    url: https://cache.example.com/gitl   # ваш endpoint; gitl ничего не хостит
-    token_env: GITL_REMOTE_CACHE_TOKEN    # env-переменная с опциональным bearer-токеном
-    timeout_ms: 3000
-```
-
-Когда remote сконфигурирован, локальный дисковый кэш остаётся первым уровнем:
-чтение проверяет диск, затем remote (remote-хит дозаписывается на диск); запись
-идёт в оба.
-
-Протокол — тупое key-value хранилище поверх HTTP, подойдёт любой статический
-object store или крошечный handler:
-
-- `GET {url}/{key}` → `200` с JSON-записью в теле, либо `404` = промах. Любой
-  другой статус, сетевая ошибка или таймаут трактуются как промах.
-- `PUT {url}/{key}` с JSON-записью в теле запроса
-  (`Content-Type: application/json`) → любой `2xx` = сохранено.
-- Если `token_env` называет env-переменную с непустым значением, оба запроса
-  несут `Authorization: Bearer <token>`. Сам токен никогда не читается из
-  конфиг-файла (та же дисциплина, что у `GITL_API_KEY`).
-- Ключи — 64-символьные hex-строки SHA-256; значения непрозрачны для сервера.
-
-**Контракт безопасности:** любая ошибка remote (таймаут, 5xx, недоступный
-endpoint) молча деградирует к локальному кэшу / отсутствию кэша — ревью никогда
-не падает из-за него. В записях хранится только ответ модели, ключ — непрозрачный
-хэш: ни дифф, ни текст промпта в remote-кэш не попадают. Записи старше
-`ttl_hours` игнорируются на стороне клиента независимо от ответа сервера.
-
-### Тренд риска (`policy.risk_log_enabled`)
-
-Каждый запуск `gitl review` дописывает свой risk-результат (уровень, диапазон,
-провайдер, время) в локальный JSONL-лог: `$XDG_DATA_HOME/gitl/risk-history.jsonl`
-(по умолчанию `~/.local/share/gitl/risk-history.jsonl`; `%AppData%\gitl\` на Windows).
-`gitl digest` читает его и показывает per-repo секцию **«Risk trend (last N days)»** —
-число ревью по уровням, направление high-risk (свежая половина окна vs более
-старая) и несколько последних ревью. В `--format=json` это опциональное поле
-`risk_trend` (`schema_version` остаётся `1`; для потребителей без поддержки поля
-документ выглядит ровно как раньше). У репозиториев без истории секция просто
-опускается.
-
-Ревью коррелируются с репозиторием по URL remote `origin` (fallback — путь
-worktree, когда `origin` нет).
-
-> **Ограничение:** история **локальна для машины** — она не переживает
-> CI-раннеры (каждый стартует с холодным диском), поэтому тренд — фича для
-> локальной работы разработчика, не для CI.
-
-Отключение — только через конфиг (CLI-флага нет):
-
-```yaml
-policy:
-  risk_log_enabled: false
-```
-
-### Кастомные шаблоны (`prompt.*_template_file` / `output.template_file`)
-
-Независимые override'ы, все только через конфиг (CLI-флага для них нет):
-
-- **`prompt.system_template_file`** — собственный **системный промпт ревью**
-  (чеклист безопасности, архитектурные ограничения, правила команды).
-  Используется только командой `gitl review`:
-
-  ```yaml
-  prompt:
-    system_template_file: "./review-policy.md"   # путь относительно CWD
-  ```
-
-  Шаблон системного промпта ревью получает `{{ .Commits }}`, `{{ .Diff }}`,
-  `{{ .Range }}`, `{{ .Staged }}` (см. `internal/prompt/templates.go`).
-
-- **`prompt.changelog_system_template_file`** — собственный **системный промпт
-  changelog'а**, используется только командой `gitl changelog --ai`:
-
-  ```yaml
-  prompt:
-    changelog_system_template_file: "./changelog-policy.md"   # путь относительно CWD
-  ```
-
-  Шаблон системного промпта changelog'а получает `{{ .Commits }}`,
-  `{{ .Range }}`, `{{ .Grouped }}` — но **не** `{{ .Diff }}`: `changelog --ai`
-  работает по метаданным коммитов, диффа там нет, и review-шаблон с `.Diff`
-  здесь бы падал. Именно поэтому ключи раздельные: каждая команда читает
-  только свой ключ, любой из них можно задать независимо от другого.
-
-- **`output.template_file`** — собственный **шаблон рендера `md`-формата** для
-  готового артефакта ревью:
-
-  ```yaml
-  output:
-    template_file: "./review-output.tmpl"   # путь относительно CWD
-  ```
-
-  Шаблон вывода получает render-функции из `internal/render/render.go`
-  (`render.TemplateFuncs()`).
-
-> **Про доверие:** ключи `prompt.*_template_file`/`output.template_file` можно
-> задать через repo-level `.gitl.yaml`, а не только в личном конфиге — значит
-> `gitl review` на склонированном чужом/недоверенном репозитории может
-> указать на шаблон *внутри этого же репозитория*. Это осознанный механизм
-> для team-shared review policy, не баг: `text/template` здесь не читает
-> произвольные файлы и не исполняет код, но к `.gitl.yaml` недоверенного
-> репозитория стоит относиться с той же осторожностью, что и к его
-> `.git/hooks` или build-скриптам.
-
-## GitHub Action
-
-`gitl` можно подключить как GitHub Action: он AI-ревьюит коммиты пул-реквеста
-и оставляет комментарий с риск-скорингом, опционально блокируя мерж по порогу
-риска. Action собирает `gitl` из исходников (`go install` на пиннутой версии).
-Также числится в [GitHub Marketplace](https://github.com/akomyagin/gitl), если
-удобнее добавить оттуда.
-
-Добавьте в свой репозиторий `.github/workflows/gitl-review.yml`:
-
-```yaml
-name: gitl review
-on:
-  pull_request:
-
-permissions:
-  contents: read          # для checkout
-  pull-requests: write    # чтобы Action мог оставить комментарий-ревью
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0    # обязательно: без полной истории base..head не резолвится
-
-      - uses: akomyagin/gitl@v0.6.2
-        with:
-          gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK, см. ниже
-          fail-on: high                               # опционально: блокировать мерж при высоком риске
-```
-
-Безопасное использование в CI:
-
-- **Ключ — только через `secrets.*`.** `gitl-api-key` передаётся из
-  `secrets.GITL_API_KEY` (создаётся в Settings → Secrets and variables →
-  Actions вашего репозитория), никогда не хардкодится в YAML и не коммитится.
-  Если секрет не задан — Action работает в детерминированном **offline-
-  режиме** (без сети и без стоимости), а не падает.
-- **Минимальные `permissions:`.** Нужны только `pull-requests: write`
-  (постинг комментария) и `contents: read` (checkout) — не выдавайте Action'у
-  более широкие права.
-- **`fetch-depth: 0` обязателен.** GitHub даёт Action'у события `pull_request`
-  с `base`/`head` SHA, но не готовый диапазон коммитов; `actions/checkout` по
-  умолчанию делает shallow-клон, при котором `base.sha..head.sha` не
-  разрешится. Нужна полная история.
-- **`fail-on` по умолчанию — `never`.** Action только комментирует, не
-  блокирует мерж, пока вы явно не включите гейт (`fail-on: high` и т.п.) —
-  тот же принцип «WARN по умолчанию, hard gate — явный opt-in», что и в CLI
-  (`--fail-on`). Когда гейт срабатывает, job падает с exit-кодом gitl `2`
-  (риск-гейт); настоящая ошибка инструмента даёт `1` — downstream-шаги могут
-  отличить «рискованное изменение» от «gitl сломался».
-- **Приватность диффов.** В CI дифф уходит тому LLM-провайдеру, что указан
-  в конфиге (по умолчанию — OpenAI-совместимый API). Для закрытого кода
-  используйте self-hosted/enterprise-провайдер (Ollama, Azure OpenAI) — см.
-  «Провайдеры» выше.
-- **Выбор провайдера.** По умолчанию Action использует провайдера из вашего
-  конфига (OpenAI-совместимый, если не задан). Чтобы обратиться к нативному
-  провайдеру, передайте `provider:` (`openai`|`ollama`|`azure_openai`|`anthropic`|`gemini`),
-  и опционально `model:` и `base-url:`, рядом с `gitl-api-key:`. Все три
-  опциональны: если их опустить, значения берутся из `.gitl.yaml`/личного
-  конфига и встроенных дефолтов gitl — см. «Провайдеры» выше. Пример:
-  `provider: anthropic` с Claude-ключом в `secrets.GITL_API_KEY`.
-- **Маскировка секретов.** GitHub автоматически маскирует значения
-  `secrets.*` в логах runner'а как `***`, но это не повод печатать ключ
-  в собственных шагах workflow.
-
-### Риск-сводка в описании PR (opt-in)
-
-С `update-pr-description: true` (по умолчанию `false`) Action дополнительно
-поддерживает компактный блок риск-сводки в конце описания PR — строка риска
-плюс ссылка на полный комментарий-ревью, обновляется при каждом запуске:
-
-```yaml
-      - uses: akomyagin/gitl@v0.6.2
-        with:
-          gitl-api-key: ${{ secrets.GITL_API_KEY }}
-          update-pr-description: true
-```
-
-Это opt-in, потому что правка описания PR — более навязчивое действие, чем
-sticky-комментарий; новых прав не требуется — `pull-requests: write`, уже
-нужный для комментария, покрывает и тело PR. Блок ограничен парой маркеров
-`<!-- gitl-review-summary -->`, и заменяется только текст между маркерами —
-всё, что вы пишете вне их, никогда не трогается. Пока только GitHub (на
-Gitea Actions игнорируется).
-
-## Gitea Actions (экспериментально)
-
-Тот же `action.yml` работает и на [Gitea Actions](https://docs.gitea.com/usage/actions/overview):
-runner Gitea исполняет composite-actions GitHub-формата, а action gitl определяет
-платформу в рантайме по переменной `GITEA_ACTIONS=true`, которую act_runner Gitea
-подставляет в каждый job. Единственная платформо-специфичная часть — постинг
-sticky-комментария — на Gitea идёт через её REST API
-(`POST`/`PATCH /api/v1/repos/{owner}/{repo}/issues/...`) через `curl`, а не через
-`gh` CLI (он умеет только GitHub API). Для пользователей GitHub ничего не
-меняется: без `GITEA_ACTIONS` action ведёт себя ровно как раньше.
-
-Добавьте `.gitea/workflows/gitl-review.yml` в свой репозиторий (полный пример с
-комментариями: [`.gitea/workflows/gitl-review.yml`](.gitea/workflows/gitl-review.yml)
-в этом репо):
-
-```yaml
-name: gitl review
-on:
-  pull_request:
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: https://github.com/actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: https://github.com/akomyagin/gitl@v0.6.2
-        with:
-          gitl-api-key: ${{ secrets.GITL_API_KEY }}   # BYOK; без ключа — offline-режим
-```
-
-Требования: включённые Actions, свежий act_runner (с поддержкой node24) и образ
-runner'а с `bash`, `git`, `curl`, `jq` и node. `GITL_API_KEY` кладётся в
-Actions-секреты Gitea, никогда — в YAML; те же BYOK-правила, что и на GitHub.
-
-> **Статус проверки — прочитайте, прежде чем полагаться.** `curl`-вызовы к REST
-> API (список комментариев, создание, патч, поиск sticky-маркера) прогнаны
-> end-to-end на реальном Gitea-инстансе (`gitea/gitea` в Docker) — пустой
-> список → POST-создание → повторный поиск находит его → PATCH-обновление →
-> по-прежнему ровно один комментарий. Эта часть работает как задумано. Что
-> **ещё не проверено** — окружение самого `act_runner`: совпадают ли
-> `GITEA_ACTIONS`/`GITHUB_API_URL`/структура PR-события внутри реального job'а
-> с тем, что предполагалось (это сверено с исходниками Gitea/act_runner/форка
-> act, но не запускалось внутри настоящего job'а). Считайте именно
-> *CI-триггер* экспериментальным, пока кто-нибудь не подтвердит зелёный прогон
-> end-to-end внутри реального Gitea Actions; баг-репорты с реальных инстансов
-> очень приветствуются.
-
-## GitLab CI (экспериментально)
-
-У gitl есть и [GitLab CI/CD component](https://docs.gitlab.com/ee/ci/components/) —
-[`templates/gitl-review.yml`](templates/gitl-review.yml) — зеркалящий GitHub Action:
-ставит gitl через `go install` на закреплённой версии, ревьюит диапазон merge
-request'а (`$CI_MERGE_REQUEST_DIFF_BASE_SHA..$CI_COMMIT_SHA`), собирает комментарий
-через общий платформо-нейтральный [`ci/comment.sh`](ci/comment.sh) и создаёт/обновляет
-**sticky-комментарий MR** через REST API GitLab (тот же маркер
-`<!-- gitl-review -->`, что на GitHub/Gitea). Job запускается только в
-merge-request-пайплайнах.
-
-Компонент опубликован в [GitLab CI/CD Catalog](https://gitlab.com/explore/catalog/alkom68/gitl)
-через релизное зеркало этого репозитория —
-[`gitlab.com/alkom68/gitl`](https://gitlab.com/alkom68/gitl) (одностороннее
-GitHub → GitLab, пуш на каждый релизный тег). На gitlab.com подключайте как
-catalog-компонент:
-
-```yaml
-# .gitlab-ci.yml (gitlab.com)
-include:
-  - component: gitlab.com/alkom68/gitl/gitl-review@v0.6.2
-    inputs:
-      fail_on: "never"      # по умолчанию; "high" — блокировать рискованные MR
-      # max_cost_usd: "0.50"
-      # gitl_version: "v0.6.2"
-```
-
-На self-hosted-инстансе GitLab `include:component` резолвит компоненты только
-своего же инстанса — там подключайте шаблон через `include:remote` напрямую с
-GitHub (inputs работают и с remote-include):
-
-```yaml
-# .gitlab-ci.yml (self-hosted GitLab)
-include:
-  - remote: "https://raw.githubusercontent.com/akomyagin/gitl/v0.6.2/templates/gitl-review.yml"
-    inputs:
-      fail_on: "never"
-```
-
-Настройка — две CI/CD-переменные (Settings → CI/CD → Variables, обе **masked**,
-никогда — в YAML):
-
-- **`GITL_API_KEY`** — BYOK-ключ LLM. Опционален: без него gitl выполняет
-  детерминированное **offline-ревью** (без сети и затрат). Достаточно завести
-  переменную проекта — она имеет приоритет над пустым дефолтом input'а
-  `gitl_api_key`. Если всё же используете input, передавайте *ссылку на
-  переменную* (`gitl_api_key: $MY_LLM_KEY`), никогда — сам ключ: значения
-  inputs интерполируются в конфигурацию пайплайна.
-- **`GITL_GITLAB_TOKEN`** — токен для постинга комментария (project access token
-  или PAT, scope `api`, роль Reporter и выше; передаётся как `PRIVATE-TOKEN`).
-  Если не задан, job откатывается на `CI_JOB_TOKEN` (заголовок `JOB-TOKEN`) —
-  но в большинстве конфигураций GitLab `CI_JOB_TOKEN` **не** имеет прав на
-  Notes API, так что fallback скорее всего упадёт (с явным сообщением об
-  ошибке, а не молчаливым пропуском). Надёжный путь — явный `GITL_GITLAB_TOKEN`.
-
-Полный self-test-пайплайн с комментариями — он же самый полный пример
-использования — [`.gitlab-ci-selftest.yml`](.gitlab-ci-selftest.yml) (запускается
-как `.gitlab-ci.yml` в GitLab-зеркале этого репозитория).
-
-> **Статус проверки — прочитайте, прежде чем полагаться.** REST-вызовы GitLab
-> (список MR-notes + поиск sticky-маркера, `POST`-создание, `PUT`-обновление) и
-> сам YAML компонента (интерполяция `spec:`/`inputs:`, `include:local` с
-> inputs — через CI Lint API) прогнаны end-to-end на реальном локальном GitLab
-> CE (`gitlab/gitlab-ce` 19.2.0 в Docker) на настоящем merge request — пустой
-> список → POST-создание → повторный поиск находит → PUT-обновление →
-> по-прежнему ровно один комментарий — теми же `curl`/`jq`-командами, что в
-> шаблоне. Что **ещё не проверено** — живой прогон
-> пайплайна: значения `CI_MERGE_REQUEST_DIFF_BASE_SHA`/`CI_COMMIT_SHA`/
-> `CI_JOB_URL` внутри реального merge-request-пайплайна записаны по документации
-> GitLab, а не наблюдались; отказ fallback'а на `CI_JOB_TOKEN` задокументирован
-> по allowlist'у job-token'а из доков GitLab, а не воспроизведён. Считайте
-> именно *пайплайн-путь* экспериментальным, пока кто-нибудь не подтвердит
-> зелёный end-to-end прогон; баг-репорты приветствуются.
-
-> **Trust note.** Компонент скачивает `ci/comment.sh` с GitLab-зеркала
-> (`gitlab.com/alkom68/gitl`) на `gitl_version` и исполняет его — без
-> проверки контрольной суммы/подписи, та же доверительная граница, что и у
-> строки `go install ...@${gitl_version}` строкой выше (тот же репозиторий,
-> тот же ref). Скачивание происходит **независимо от способа подключения** —
-> Catalog или `include:remote` — потому что include компонента доставляет
-> только YAML-шаблон, но не файлы репозитория компонента, так что скачивание
-> механически неустранимо. Загрузка с той же GitLab-инстанции, что публикует
-> компонент (а не с GitHub), сохраняет один namespace/ref — более честная
-> модель доверия, чем cross-host fetch. Если это важно для вашей модели угроз
-> — пиньте `gitl_version` на SHA коммита, а не тег (теги перемещаемы).
-
-## Bitbucket Pipelines (экспериментально)
-
-Интеграция с Bitbucket поставляется как [Pipe](https://support.atlassian.com/bitbucket-cloud/docs/what-are-pipes/) —
-а pipes по определению являются Docker-образами, поэтому, в отличие от GitHub/Gitea
-action и GitLab-компонента (чистые YAML-обёртки), здесь это самодостаточный образ:
-[`bitbucket-pipe/Dockerfile`](bitbucket-pipe/Dockerfile) собирает статический бинарь
-`gitl` и вшивает в образ общий рендер [`ci/comment.sh`](ci/comment.sh) и точку входа
-[`bitbucket-pipe/pipe.sh`](bitbucket-pipe/pipe.sh). Pipe резолвит диапазон PR
-(`$BITBUCKET_PR_DESTINATION_COMMIT..$BITBUCKET_COMMIT`), запускает
-`gitl review --format=json` и создаёт/обновляет **sticky-комментарий PR** через REST
-API Bitbucket Cloud (тот же маркер `<!-- gitl-review -->`, что на остальных
-платформах). Справочник переменных — [`bitbucket-pipe/pipe.yml`](bitbucket-pipe/pipe.yml).
-
-> **Статус образа.** Опубликован на [Docker Hub](https://hub.docker.com/r/alkom68/gitl-review-pipe)
-> как `alkom68/gitl-review-pipe` начиная с `v0.5.2` — job `docker-publish`
-> релизного workflow пушит `:<version>` и `:latest` на каждый релизный тег.
-> В реестре есть только `0.5.2` и новее: более ранние релизы вышли до
-> публикации (теги `0.5.0`/`0.5.1` не пушились) — их не пинить.
-
-```yaml
-# bitbucket-pipelines.yml
-pipelines:
-  pull-requests:
-    '**':
-      - step:
-          name: gitl review
-          clone:
-            depth: full   # дефолтный клон глубиной 50 может не содержать базовый коммит PR
-          script:
-            - pipe: docker://alkom68/gitl-review-pipe:0.6.2
-              variables:
-                GITL_API_KEY: $GITL_API_KEY                    # BYOK; уберите для offline-ревью
-                GITL_BITBUCKET_TOKEN: $GITL_BITBUCKET_TOKEN    # постит комментарий PR
-                # FAIL_ON: "high"        # по умолчанию "never" — только комментарий, без гейта
-                # MAX_COST_USD: "0.50"
-```
-
-Настройка — две **secured**-переменные репозитория/workspace (Repository settings →
-Pipelines → Repository variables; всегда ссылкой `$VAR`, никогда — литеральные
-значения в YAML):
-
-- **`GITL_API_KEY`** — BYOK-ключ LLM. Опционален: без него gitl выполняет
-  детерминированное **offline-ревью** (без сети и затрат).
-- **`GITL_BITBUCKET_TOKEN`** — креденшал для постинга комментария PR:
-  **access token** репозитория/проекта/workspace со scope `pullrequest:write`,
-  передаётся как `Authorization: Bearer`. Альтернатива: задайте
-  `GITL_BITBUCKET_USER` + `GITL_BITBUCKET_APP_PASSWORD` (app password со scope
-  `pullrequest:write`) — тогда Basic-аутентификация. Если не задано ни то, ни
-  другое — pipe падает сразу с явным сообщением, ещё **до** каких-либо трат на LLM.
-
-> **Supply-chain-заметка (чем это отличается от GitLab-компонента).** Pipe не
-> исполняет ничего, скачанного в рантайме: бинарь `gitl`, `ci/comment.sh` и
-> точка входа собраны в версионированный образ из одного дерева исходников.
-> GitLab-компонент вынужден скачивать `ci/comment.sh` по сети без проверки
-> целостности (см. его trust note выше); pipe закрывает эту брешь по
-> построению.
-
-> **Статус проверки — прочитайте, прежде чем полагаться.** Сборка образа и
-> полный поток внутри контейнера проверены локально: `docker build` из этого
-> репозитория, затем `docker run` на настоящем тестовом git-репозитории с
-> эмулированными переменными `BITBUCKET_*` — offline-ревью → корректный
-> sticky-`comment.md` → создание комментария (`POST`), sticky-обновление
-> (`PUT`, по-прежнему ровно один комментарий) и проброс кода выхода
-> `--fail-on`, прогнаны end-to-end против локального мока comments API
-> Bitbucket; fail-fast-пути (нет креденшала/PR-переменных) и fallback-заметка
-> на битом диапазоне тоже прогнаны в контейнере. Что **ещё не проверено**: всё,
-> что касается настоящей инфраструктуры Bitbucket — REST-вызовы к
-> api.bitbucket.org (формы взяты из документации Atlassian API), точные
-> predefined-переменные внутри живого PR-пайплайна
-> (`BITBUCKET_PR_DESTINATION_COMMIT` и др. — задокументированные допущения, а
-> не наблюдавшиеся значения) и то, как Pipelines монтирует клон в контейнеры
-> pipe'ов. Считайте именно *live-пайплайн-путь* экспериментальным, пока
-> кто-нибудь не подтвердит зелёный прогон на реальном Bitbucket-workspace;
-> баг-репорты приветствуются.
-
-## Pre-commit хук (локально)
-
-`gitl` поставляет хук для фреймворка [pre-commit](https://pre-commit.com/), чтобы
-`gitl review --staged --quiet` запускался автоматически перед каждым коммитом —
-локально, в офлайн-режиме и без затрат по умолчанию (`--quiet` включён в
-манифесте хука по умолчанию, чтобы офлайн-уведомление не печаталось заново на
-каждый коммит).
-
-Добавьте в `.pre-commit-config.yaml` вашего репозитория:
-
-```yaml
-repos:
-  - repo: https://github.com/akomyagin/gitl
-    rev: v0.6.2   # pin to a released tag
-    hooks:
-      - id: gitl-review
-```
-
-затем выполните `pre-commit install`. Фреймворк сам собирает бинарь `gitl`
-(`language: golang`) и кэширует окружение в `~/.cache/pre-commit/`, так что
-стоимость сборки платится один раз, а не на каждый коммит.
-
-Opt-in блокирующего режима с лимитом стоимости:
-
-```yaml
-hooks:
-  - id: gitl-review
-    args: [--fail-on=high, --max-cost-usd=0.05]   # opt-in: block on high risk, cap cost
-```
-
-Экспортируйте `GITL_API_KEY` в окружении для настоящего AI-ревью; без него хук
-выполняет детерминированное offline-ревью (без сети и затрат).
-
-Что важно знать:
-
-- **Офлайн по умолчанию.** Без API-ключа, без сети, без затрат на каждый коммит.
-  Задайте `GITL_API_KEY`, чтобы включить настоящее AI-ревью.
-- **По умолчанию не блокирует коммит.** Хук печатает ревью, но не заваливает
-  коммит — тот же принцип «WARN по умолчанию, жёсткий гейт — явный opt-in», что
-  у CLI/Action. Чтобы блокировать, добавьте `args: [--fail-on=high]`.
-- **Задержка.** Ревью через реальный API занимает несколько секунд; держите его
-  вне горячего пути, оставив офлайн-режим, или ограничьте через `--max-cost-usd`.
-- **Приватность диффа.** С реальным ключом staged-дифф уходит настроенному
-  LLM-провайдеру — для приватного кода используйте self-hosted/enterprise-провайдера
-  (Ollama, Azure OpenAI), см. раздел «Провайдеры» выше.
-- **Подавление офлайн-уведомления.** Манифест передаёт `--quiet` по умолчанию,
-  поэтому уведомление «using deterministic offline review» не печатается на
-  каждый коммит; тот же переключатель доступен в `review`/`changelog` как
-  `--quiet` / `GITL_QUIET`, либо для всего репозитория через
-  `output.quiet: true` (MCP-сервер учитывает только `output.quiet`/
-  `GITL_OUTPUT_QUIET` — у него нет флагов, поэтому короткий алиас `GITL_QUIET`
-  там не действует). Ошибки и сам вывод ревью не затрагиваются.
-
-### Без фреймворка pre-commit
-
-Обычный git-хук тоже работает:
-
-```bash
-# .git/hooks/pre-commit  (chmod +x)
-#!/usr/bin/env bash
-set -euo pipefail
-# Offline, non-blocking review of staged changes (WARN by default); --quiet
-# suppresses the per-commit offline notice on stderr.
-gitl review --staged --quiet || true
-# To block the commit on high risk instead, replace the line above with:
-#   gitl review --staged --quiet --fail-on=high
-```
-
-## MCP-сервер
-
-`gitl mcp` запускает gitl как [Model Context Protocol](https://modelcontextprotocol.io)
-stdio-сервер — отдельный, дополнительный канал к CLI/CI-использованию выше, для работы с
-`gitl` интерактивно внутри агентской сессии (Claude Desktop, Cursor, Windsurf и т.д.)
-вместо вызова через shell. Экспонирует два tool'а:
-
-- **`gitl_review`** — тот же движок ревью, что `gitl review`: `range`/`pr`/`staged`
-  (ровно один), опциональный per-call оверрайд `model`. Провайдер и endpoint фиксируются
-  при старте сервера сознательно: tool вызывает AI-агент, которым можно управлять через
-  prompt injection прямо в ревьюируемом контенте — per-call `base_url` позволил бы
-  вредоносному коммиту перенаправить запрос и слить настоящий API-ключ. Всегда
-  возвращает структурированный JSON-артефакт (без md/text-рендера, без стриминга — tool
-  result атомарен). `risk.level` возвращается как данные; `--fail-on` в MCP-режиме нет,
-  так как нет exit-кода процесса, который можно было бы гейтить.
-- **`gitl_digest`** — то же, что `gitl digest`: `days` (по умолчанию 7), опциональный
-  `repos`. Без явного `repos` tool дайджестит только рабочую директорию сервера (плюс
-  `digest.repos` из `.gitl.yaml`, если настроен) — никогда не обходит произвольные пути по
-  собственной инициативе. Явный `repos` учитывается как есть (у вызывающего агента и так
-  есть доступ к файловой системе через свои средства; это не access-control граница, а
-  просто «не удивлять пользователя» по умолчанию).
-
-Добавьте в конфиг вашего MCP-клиента (Claude Desktop, Cursor и т.д.):
-
-```json
-{
-  "mcpServers": {
-    "gitl": {
-      "command": "gitl",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-Конфиг загружается один раз при старте так же, как у обычных команд (`.gitl.yaml` +
-личный конфиг + `GITL_*` env, из директории, в которой запущен `gitl mcp`). Без ключа
-tool-вызовы идут в том же детерминированном offline-режиме, что и CLI. `stdout`
-зарезервирован под MCP-протокол — ничего человекочитаемого туда не пишется никогда;
-предупреждения идут в stderr.
+Проект я развиваю в открытую, и делаю его один — самое ценное, что можно мне
+прислать, это issues, вопросы и баг-репорты с реальных CI-конфигураций.
+Открывайте issue или PR — я читаю всё.
 
 ## Лицензия
 

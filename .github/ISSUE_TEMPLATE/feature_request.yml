@@ -1,0 +1,40 @@
+name: Feature request
+description: Suggest an idea for gitl
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: What are you trying to do that gitl doesn't support today?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: A new flag, command, config field — whatever shape you have in mind
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: >-
+        Is there a way to do this today with existing flags/config (e.g. a
+        custom prompt template, `exclude_globs`)? gitl leans toward config
+        over new flags where the two overlap.
+
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      description: >-
+        gitl is a solo-maintained project with a deliberately small surface
+        (review + changelog + digest, one risk-score contract). New provider
+        integrations, new output formats, and CI-platform wrappers are all
+        fair game; a second unrelated product surface probably isn't.
+      options:
+        - label: I've checked the README/docs and this doesn't already exist

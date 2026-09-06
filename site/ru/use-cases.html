@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gitl — сценарии использования</title>
+<meta name="description" content="Четыре разобранных сценария gitl: гейтинг PR по AI-риску в CI, офлайн-страховка перед коммитом, release notes одной командой и мульти-репо дайджест к стендапу.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://akomyagin.github.io/gitl/ru/use-cases.html">
+<meta property="og:title" content="gitl — сценарии использования">
+<meta property="og:description" content="Четыре разобранных сценария gitl: гейтинг PR по AI-риску в CI, офлайн-страховка перед коммитом, release notes одной командой и мульти-репо дайджест к стендапу.">
+<meta property="og:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="gitl — сценарии использования">
+<meta name="twitter:description" content="Четыре разобранных сценария gitl: гейтинг PR по AI-риску в CI, офлайн-страховка перед коммитом, release notes одной командой и мульти-репо дайджест к стендапу.">
+<meta name="twitter:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="container">
+    <a class="logo" href="index.html"><span>&gt;</span> gitl</a>
+    <nav class="main">
+      <a href="index.html">Главная</a>
+      <a class="active" href="use-cases.html">Сценарии</a>
+      <a href="docs.html">Документация</a>
+      <a href="https://github.com/akomyagin/gitl">GitHub</a>
+    </nav>
+    <div class="lang"><a href="../use-cases.html">EN</a> · <span class="cur">RU</span></div>
+  </div>
+</header>
+
+<main class="container">
+
+<h1>Сценарии использования</h1>
+<p class="subtitle">Четыре сценария, которыми я реально пользуюсь, разобранные
+от начала до конца. Каждая команда и каждый конфиг здесь настоящие — можно
+копировать как есть.</p>
+
+<h2 id="ci-gate">1. Гейтить PR по AI-риску в CI</h2>
+
+<p><strong>Проблема.</strong> В PR приезжает большое или чувствительное
+изменение, и никто не поднимает флаг до merge. Нужен автоматический ревьюер,
+который не просто комментирует, а умеет <em>завалить проверку</em> выше
+выбранного вами порога риска.</p>
+
+<p><strong>Настройка.</strong> Добавьте в репозиторий
+<code>.github/workflows/gitl-review.yml</code>:</p>
+
+<pre><code>name: gitl review
+on:
+  pull_request:
+
+permissions:
+  contents: read          <span class="c"># для checkout</span>
+  pull-requests: write    <span class="c"># чтобы оставить комментарий-ревью</span>
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0    <span class="c"># обязательно: shallow-клон не разрешит base..head</span>
+
+      - uses: akomyagin/gitl@v0.6.2
+        with:
+          gitl-api-key: ${{ secrets.GITL_API_KEY }}   <span class="c"># BYOK; без ключа — офлайн-режим</span>
+          fail-on: high                               <span class="c"># опционально: блокировать merge при высоком риске</span></code></pre>
+
+<p><strong>Что получаете.</strong> Action оставляет sticky-комментарий с ревью
+и уровнем риска, обновляемый на каждый push. С <code>fail-on: high</code>
+проверка падает с exit-кодом gitl <code>2</code>, когда срабатывает риск-гейт —
+настоящая ошибка инструмента даёт <code>1</code>, так что downstream-шаги
+отличают «рискованное изменение» от «gitl сломался». Без ключа выполняется
+детерминированное офлайн-ревью: без сети, без затрат, CI остаётся зелёным.</p>
+
+<figure class="demo">
+  <img src="../assets/demo-gate.gif" alt="gitl --fail-on=high падает с exit-кодом 2">
+  <figcaption><code>--fail-on=high</code> превращает высокорисковый диапазон в
+  exit-код 2, по которому CI может гейтить.</figcaption>
+</figure>
+
+<p>Обёртки для GitLab, Bitbucket и Gitea тоже есть — см.
+<a href="docs.html#ci-integrations">CI-интеграции</a>.</p>
+
+<h2 id="pre-commit">2. Страховка перед коммитом</h2>
+
+<p><strong>Проблема.</strong> Хочется последнего взгляда на то, что вот-вот
+уйдёт в коммит — но без API-вызова на каждый коммит и без задержки на горячем
+пути.</p>
+
+<p><strong>Настройка.</strong> gitl поставляет хук для фреймворка
+<a href="https://pre-commit.com/">pre-commit</a>. Добавьте в
+<code>.pre-commit-config.yaml</code>:</p>
+
+<pre><code>repos:
+  - repo: https://github.com/akomyagin/gitl
+    rev: v0.6.2   <span class="c"># пиньте на релизный тег</span>
+    hooks:
+      - id: gitl-review</code></pre>
+
+<p>затем выполните <code>pre-commit install</code>. Opt-in блокирующего режима
+с лимитом стоимости:</p>
+
+<pre><code>hooks:
+  - id: gitl-review
+    args: [--fail-on=high, --max-cost-usd=0.05]</code></pre>
+
+<p><strong>Что получаете.</strong> <code>gitl review --staged --quiet</code>
+запускается перед каждым коммитом — офлайн и бесплатно по умолчанию (без
+ключа, без сети). Хук предупреждает, но не блокирует, пока вы явно не включите
+гейт. Экспортируйте <code>GITL_API_KEY</code>, если вместо эвристики нужно
+настоящее AI-ревью. Обычный однострочный
+<code>.git/hooks/pre-commit</code> тоже работает — см.
+<a href="docs.html#pre-commit">документацию</a>.</p>
+
+<h2 id="release-notes">3. Release notes одной командой</h2>
+
+<p><strong>Проблема.</strong> Писать release notes, проматывая
+<code>git log</code>, утомительно, а сырые conventional-commit-заголовки — не
+та проза, которую хочется читать.</p>
+
+<p><strong>Настройка.</strong></p>
+
+<pre><code><span class="c"># детерминированный changelog в стиле Keep a Changelog</span>
+gitl changelog
+
+<span class="c"># модель переписывает его в читаемую прозу release notes</span>
+GITL_API_KEY=sk-... gitl changelog --ai</code></pre>
+
+<p><strong>Что получаете.</strong> По умолчанию — детерминированный changelog
+от последнего тега до <code>HEAD</code>, без LLM. С <code>--ai</code> модель
+превращает сгруппированный результат в прозу release notes и переносит значимые
+non-conventional коммиты из «Other» в подходящие категории. Без ключа (или при
+некорректном ответе модели) — откат к детерминированному changelog с
+предупреждением: команда никогда не падает, её безопасно ставить в
+релизный скрипт.</p>
+
+<h2 id="digest">4. Мульти-репо дайджест к стендапу</h2>
+
+<p><strong>Проблема.</strong> Работа размазана по нескольким репозиториям, и
+«что тут происходило за две недели» означает открыть каждый и листать логи.</p>
+
+<p><strong>Настройка.</strong></p>
+
+<pre><code><span class="c"># сводка активности по репозиториям, собирается параллельно</span>
+gitl digest --days=14 --repos=../service-a,../service-b,../infra
+
+<span class="c"># интерактивный TUI-просмотрщик</span>
+gitl digest --days=14 --repos=../service-a,../service-b --tui</code></pre>
+
+<p><strong>Что получаете.</strong> Коммиты, файлы и число строк по авторам и
+темам для каждого репозитория — один недоступный репозиторий не валит
+остальные. TUI листается клавишами <code>j</code>/<code>k</code> или стрелками;
+<code>q</code> — выход. JSON-вывод (<code>--format=json</code>) удобно
+скармливать дашбордам.</p>
+
+<figure class="demo">
+  <img src="../assets/demo-digest-tui.gif" alt="gitl digest --tui — просмотр сводки активности">
+  <figcaption><code>gitl digest --tui</code> — интерактивный просмотрщик
+  сводки активности.</figcaption>
+</figure>
+
+<p><a href="docs.html">Полная документация →</a></p>
+
+</main>
+
+<footer class="site">
+  <div class="container">
+    <a href="https://github.com/akomyagin/gitl">gitl на GitHub</a> ·
+    <a href="https://github.com/akomyagin/gitl/blob/master/LICENSE">лицензия MIT</a> ·
+    без телеметрии — никогда
+  </div>
+</footer>
+
+</body>
+</html>

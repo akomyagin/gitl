@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/akomyagin/gitl/security/advisories/new
+    about: Please report security issues privately, not as a public issue — see SECURITY.md.
+  - name: Questions and discussion
+    url: https://github.com/akomyagin/gitl/discussions
+    about: For usage questions or general discussion, use Discussions instead of an issue.

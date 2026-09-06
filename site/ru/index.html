@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>gitl — AI-ревью кода для вашего CI с риск-скором для гейтинга</title>
+<meta name="description" content="gitl читает диапазон коммитов и выдаёт AI-ревью с машиночитаемым уровнем риска, детерминированный changelog и мульти-репо дайджест. Один Go-бинарник, BYOK, без телеметрии, работает полностью офлайн.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://akomyagin.github.io/gitl/ru/">
+<meta property="og:title" content="gitl — AI-ревью кода для вашего CI с риск-скором для гейтинга">
+<meta property="og:description" content="gitl читает диапазон коммитов и выдаёт AI-ревью с машиночитаемым уровнем риска, детерминированный changelog и мульти-репо дайджест. Один Go-бинарник, BYOK, без телеметрии, работает полностью офлайн.">
+<meta property="og:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="gitl — AI-ревью кода для вашего CI с риск-скором для гейтинга">
+<meta name="twitter:description" content="gitl читает диапазон коммитов и выдаёт AI-ревью с машиночитаемым уровнем риска, детерминированный changelog и мульти-репо дайджест. Один Go-бинарник, BYOK, без телеметрии, работает полностью офлайн.">
+<meta name="twitter:image" content="https://akomyagin.github.io/gitl/assets/social-preview.png">
+<link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="container">
+    <a class="logo" href="index.html"><span>&gt;</span> gitl</a>
+    <nav class="main">
+      <a class="active" href="index.html">Главная</a>
+      <a href="use-cases.html">Сценарии</a>
+      <a href="docs.html">Документация</a>
+      <a href="https://github.com/akomyagin/gitl">GitHub</a>
+    </nav>
+    <div class="lang"><a href="../index.html">EN</a> · <span class="cur">RU</span></div>
+  </div>
+</header>
+
+<main class="container">
+
+<h1>AI-ревью кода для вашего CI<br>с риск-скором, по которому можно гейтить merge</h1>
+<p class="tagline">Ваш ключ, любой провайдер или полностью офлайн.</p>
+<p class="subtitle"><code>gitl</code> (git-log-lens) читает диапазон коммитов и
+превращает его в структурированный инженерный артефакт: AI-ревью с машиночитаемым
+уровнем риска, детерминированный changelog и сводку активности по нескольким
+репозиториям — один Go-бинарник, без сервера и без базы данных.</p>
+
+<figure class="demo">
+  <img src="../assets/demo-review.gif" alt="gitl review — риск-скор в терминале">
+  <figcaption><code>gitl review</code> — AI-ревью диапазона коммитов с
+  машиночитаемым уровнем риска. Без ключа — детерминированная офлайн-эвристика:
+  без сети и без затрат.</figcaption>
+</figure>
+
+<h2>Установка</h2>
+
+<pre><code><span class="c"># Homebrew (macOS/Linux)</span>
+brew install akomyagin/tap/gitl
+
+<span class="c"># npm — скачивает готовый бинарник под вашу платформу и сверяет контрольную сумму</span>
+npx gitl-cli review HEAD~5..HEAD        <span class="c"># или: npm install -g gitl-cli</span>
+
+<span class="c"># Go-тулчейн</span>
+go install github.com/akomyagin/gitl/cmd/gitl@latest</code></pre>
+
+<div class="callout">
+<strong>Подписанные релизы (cosign keyless + SLSA L3 provenance), без телеметрии,
+BYOK — ваш API-ключ никогда не покидает вашу машину.</strong> Любой релиз можно
+проверить до запуска:
+<a href="https://github.com/akomyagin/gitl/blob/master/VERIFY.md">VERIFY.md</a>.
+</div>
+
+<h2>Три команды, один бинарник</h2>
+
+<div class="features">
+  <div class="feature">
+    <h3>gitl review</h3>
+    <p>AI-ревью диапазона коммитов, PR или staged-изменений с машинным уровнем
+    риска (low / medium / high). <code>--fail-on=high</code> завершается кодом
+    2 — контракт, по которому CI может ветвиться. Стримит токены; кэширует
+    ответы на диске.</p>
+  </div>
+  <div class="feature">
+    <h3>gitl changelog</h3>
+    <p>Changelog в стиле Keep a Changelog с группировкой по conventional
+    commits — детерминированный по умолчанию, <code>--ai</code> переписывает
+    его в прозу release notes и чисто откатывается без ключа. Никогда не
+    падает.</p>
+  </div>
+  <div class="feature">
+    <h3>gitl digest</h3>
+    <p>Сводка активности по авторам, темам и файлам по нескольким репозиториям
+    параллельно — с интерактивным TUI-просмотрщиком (<code>--tui</code>).</p>
+  </div>
+</div>
+
+<p>Кроме того, gitl — это MCP-сервер (<code>gitl mcp</code>) и CI-обёртки для
+GitHub Actions, GitLab, Bitbucket и Gitea — см.
+<a href="docs.html">полную документацию</a>.</p>
+
+<h2>Попробовать за две минуты</h2>
+
+<pre><code><span class="c"># AI-ревью диапазона коммитов (стримится в терминал)</span>
+GITL_API_KEY=sk-... gitl review HEAD~5..HEAD
+
+<span class="c"># без ключа — детерминированное офлайн-ревью (эвристический риск, без сети)</span>
+gitl review HEAD~5..HEAD
+
+<span class="c"># машиночитаемый вывод + CI-гейт</span>
+gitl review HEAD~5..HEAD --format=json --fail-on=high   <span class="c"># exit 2 при высоком риске</span></code></pre>
+
+<p>Exit-коды — часть контракта: <code>0</code> — ок, <code>1</code> — ошибка
+инструмента, <code>2</code> — сработал риск-гейт <code>--fail-on</code>.</p>
+
+<p>
+<a class="cta" href="https://github.com/akomyagin/gitl">★ Star на GitHub</a>
+&nbsp;&nbsp;<a href="use-cases.html">Смотреть сценарии →</a>
+</p>
+
+</main>
+
+<footer class="site">
+  <div class="container">
+    <a href="https://github.com/akomyagin/gitl">gitl на GitHub</a> ·
+    <a href="https://github.com/akomyagin/gitl/blob/master/LICENSE">лицензия MIT</a> ·
+    без телеметрии — никогда
+  </div>
+</footer>
+
+</body>
+</html>
