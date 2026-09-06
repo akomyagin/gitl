@@ -146,22 +146,28 @@ func runChangelogAI(ctx context.Context, cmd *cobra.Command, cfg *config.Config,
 	}
 
 	// LLM response cache: same conditions as review (offline is already
-	// excluded above). The RAW model response is cached, not the parsed
-	// artifact, so a single cache hit serves every --format.
-	noCache, _ := cmd.Flags().GetBool("no-cache")
-	useCache := cfg.Cache.Enabled && !noCache && cfg.Cache.TTLHours > 0
+	// excluded above, so useCache()'s own OfflineMode() term is redundant
+	// here but kept — one shared predicate, not a re-inlined copy that could
+	// silently diverge from review's if a new condition is added later). The
+	// RAW model response is cached, not the parsed artifact, so a single
+	// cache hit serves every --format.
+	noCache, err := cmd.Flags().GetBool("no-cache")
+	if err != nil {
+		return true, err
+	}
+	cacheActive := useCache(cfg, noCache)
 	var (
 		cache    llmcache.Cache
 		cacheKey string
 	)
-	if useCache {
+	if cacheActive {
 		cache = llmcache.Open(llmcache.Options{
 			TTL:           time.Duration(cfg.Cache.TTLHours) * time.Hour,
 			RemoteURL:     cfg.Cache.Remote.URL,
 			RemoteToken:   remoteCacheToken(cfg),
 			RemoteTimeout: time.Duration(cfg.Cache.Remote.TimeoutMS) * time.Millisecond,
 		})
-		cacheKey = llmCacheKey(cfg, system, user)
+		cacheKey = llmCacheKey(cfg, "changelog", system, user)
 		if resp, ok, _ := cache.Get(cacheKey); ok {
 			if payload, pok := llm.ParseChangelogResponse(resp.Content); pok {
 				slog.Debug("llm cache hit", "key", cacheKey[:12])

@@ -333,7 +333,10 @@ func runReview(ctx context.Context, cmd *cobra.Command, gf *globalFlags, src dif
 	if err != nil {
 		return err
 	}
-	noCache, _ := cmd.Flags().GetBool("no-cache")
+	noCache, err := cmd.Flags().GetBool("no-cache")
+	if err != nil {
+		return err
+	}
 
 	out := cmd.OutOrStdout()
 	errOut := cmd.ErrOrStderr()
@@ -640,9 +643,20 @@ func truncateDiff(diff string, maxBytes int) string {
 	}
 	slog.Warn("diff exceeds max_diff_bytes; truncating", "bytes", len(diff), "limit", maxBytes)
 	// Align the cut to a valid UTF-8 rune boundary so the result is never a
-	// malformed string (multi-byte runes must not be split mid-sequence).
-	for maxBytes > 0 && !utf8.RuneStart(diff[maxBytes]) {
-		maxBytes--
+	// malformed string (multi-byte runes must not be split mid-sequence). A
+	// UTF-8 sequence is at most 4 bytes, so the backward search never needs to
+	// look further than 3 bytes; bounding it here means pathological/invalid
+	// UTF-8 near the cut point (e.g. a long run of continuation-pattern
+	// bytes) can't walk the cut all the way down to 0 and silently discard
+	// the entire diff instead of just truncating it.
+	cut := maxBytes
+	for steps := 0; steps < 4 && cut > 0 && !utf8.RuneStart(diff[cut]); steps++ {
+		cut--
 	}
-	return diff[:maxBytes] + "\n[... diff truncated ...]\n"
+	if cut == 0 && !utf8.RuneStart(diff[0]) {
+		// No boundary within the bounded window: accept a possibly-split
+		// rune at the original cut point rather than losing all content.
+		cut = maxBytes
+	}
+	return diff[:cut] + "\n[... diff truncated ...]\n"
 }

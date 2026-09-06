@@ -114,7 +114,7 @@ func prepareReview(cfg *config.Config, src diffSource, opts ReviewOptions) (*rev
 			RemoteToken:   remoteCacheToken(cfg),
 			RemoteTimeout: time.Duration(cfg.Cache.Remote.TimeoutMS) * time.Millisecond,
 		})
-		plan.cacheKey = llmCacheKey(cfg, system, user)
+		plan.cacheKey = llmCacheKey(cfg, "review", system, user)
 	}
 	return plan, nil
 }
@@ -166,9 +166,14 @@ func remoteCacheToken(cfg *config.Config) string {
 // that can change the response: provider, model, the RESOLVED base_url
 // (config.Load fills provider defaults in before any command runs), the Azure
 // coordinates, the sampling parameters, and the prompts. Shared by review and
-// changelog --ai so the two cached paths can never diverge on key composition.
-func llmCacheKey(cfg *config.Config, system, user string) string {
+// changelog --ai so the two cached paths can never diverge on key composition
+// — kind ("review" vs "changelog") keeps their cache entries disjoint by
+// construction even if a custom system_template_file renders identical
+// system+user text for both (TD-5), rather than relying on the prompts
+// happening to differ in practice.
+func llmCacheKey(cfg *config.Config, kind, system, user string) string {
 	return llmcache.Key(llmcache.KeyParams{
+		Kind:            kind,
 		Provider:        cfg.LLM.Provider,
 		Model:           cfg.LLM.Model,
 		BaseURL:         cfg.LLM.BaseURL,

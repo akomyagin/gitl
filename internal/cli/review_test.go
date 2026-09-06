@@ -169,6 +169,27 @@ func TestTruncateDiff(t *testing.T) {
 	}
 }
 
+// TestTruncateDiffPathologicalContinuationBytes guards against the backward
+// rune-boundary search walking the cut all the way down to 0 (and silently
+// discarding the entire diff) when the bytes preceding the requested cut
+// point are all UTF-8 continuation-pattern bytes (0x80-0xBF) — reachable with
+// malformed/binary content, since a valid UTF-8 sequence is at most 4 bytes
+// and the search must not look further back than that.
+func TestTruncateDiffPathologicalContinuationBytes(t *testing.T) {
+	t.Parallel()
+	// 50 continuation-pattern bytes (invalid as a UTF-8 sequence on their
+	// own) followed by plain ASCII padding, cut requested mid-way through
+	// the continuation-byte run.
+	diff := strings.Repeat("\x80", 50) + strings.Repeat("y", 50)
+	out := truncateDiff(diff, 30)
+	if !strings.Contains(out, "[... diff truncated ...]") {
+		t.Errorf("missing truncation marker:\n%q", out)
+	}
+	if len(out) == len("\n[... diff truncated ...]\n") {
+		t.Errorf("truncation discarded all content instead of bounding the search: %q", out)
+	}
+}
+
 // TestClassifyReviewArg: the mode classifier for the review positional
 // argument. Only a matching-but-invalid PR number (pr/0) is an error;
 // non-matching arguments (pr/-1, pr/abc, plain ranges) are ranges, never

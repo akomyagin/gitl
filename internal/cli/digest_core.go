@@ -144,6 +144,12 @@ func normalizeRepoPaths(raw []string) []string {
 		if !filepath.IsAbs(p) {
 			if abs, err := filepath.Abs(p); err == nil {
 				p = abs
+			} else {
+				// Only fails if os.Getwd() fails (e.g. cwd deleted mid-run);
+				// keep the relative path rather than dropping the repo, but
+				// surface it — silently leaving a path relative would violate
+				// this function's own "made absolute" contract with no trace.
+				slog.Warn("could not make repo path absolute; keeping as-is", "path", p, "err", err)
 			}
 		}
 		paths = append(paths, p)

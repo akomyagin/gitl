@@ -47,6 +47,14 @@ func NewInDir(dir string, ttl time.Duration) *diskCache {
 // RESOLVED endpoint (config.Load fills provider defaults in before call sites
 // build a key). The key scheme is backend-agnostic: disk and remote share it.
 type KeyParams struct {
+	// Kind discriminates the response CONTRACT a cache entry belongs to
+	// (e.g. "review" vs "changelog") — the two commands execute their
+	// prompt templates against structurally different data and parse the
+	// response differently, so their cache entries must never collide even
+	// if a custom system_template_file happens to render identical
+	// system+user text for both (TD-5). Callers must always set this to a
+	// distinct, stable literal per command/contract.
+	Kind            string
 	Provider        string
 	Model           string
 	BaseURL         string
@@ -68,6 +76,7 @@ type KeyParams struct {
 // collision.
 func Key(p KeyParams) string {
 	fields := []string{
+		p.Kind,
 		p.Provider,
 		p.Model,
 		p.BaseURL,

@@ -64,7 +64,10 @@ if jq -e . "$review_json" > /dev/null 2>&1; then
     # jsonRisk.Summary), so a plain != "" check is enough.
     jq -r '"**Risk:** " + (.risk.level | ascii_upcase) + (if .risk.summary != "" then " — " + .risk.summary else "" end) + (if .risk.heuristic then " *(heuristic)*" else "" end)' "$review_json"
     echo
-    jq -r '.review_markdown' "$review_json"
+    # `// "..."` guards against a future review.json shape that omits or
+    # nulls review_markdown — jq -r on a missing/null field would otherwise
+    # print the literal string "null" as the comment body.
+    jq -r '.review_markdown // "_(no review body in the review artifact)_"' "$review_json"
   } > "$comment_file"
 else
   if [ -n "${GITL_CI_RUN_URL:-}" ]; then

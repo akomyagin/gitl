@@ -294,6 +294,21 @@ func TestRunReviewCoreCostGuardBlocks(t *testing.T) {
 	}
 }
 
+// TestLlmCacheKeyKindSeparatesReviewAndChangelog guards TD-5 at the production
+// call-site level (not just llmcache.Key in isolation): review and
+// changelog --ai must produce different cache keys from llmCacheKey even when
+// given the identical cfg/system/user — e.g. a custom system_template_file
+// that happens to render the same prompt for both commands must not let one
+// command's cached response be served to the other.
+func TestLlmCacheKeyKindSeparatesReviewAndChangelog(t *testing.T) {
+	cfg := &config.Config{}
+	reviewKey := llmCacheKey(cfg, "review", "same system", "same user")
+	changelogKey := llmCacheKey(cfg, "changelog", "same system", "same user")
+	if reviewKey == changelogKey {
+		t.Error("review and changelog cache keys must differ even with identical system+user text")
+	}
+}
+
 // TestStoreCacheSkipsEmptyResponse: defense in depth against cache poisoning —
 // an empty/whitespace-only provider response must never be written to the
 // shared LLM cache, whichever path produced it (a poisoned entry would be

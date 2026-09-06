@@ -182,6 +182,20 @@ func TestKeyFieldsUnambiguous(t *testing.T) {
 	}
 }
 
+// TestKeyKindDiscriminatesOtherwiseIdenticalParams guards TD-5: review and
+// changelog --ai must never share a cache namespace, even when every other
+// field (including System/User) happens to be identical — e.g. a custom
+// system_template_file that coincidentally renders the same prompt for both
+// commands. Kind must be the thing that keeps them disjoint, not incidental
+// prompt-text divergence.
+func TestKeyKindDiscriminatesOtherwiseIdenticalParams(t *testing.T) {
+	review := KeyParams{Kind: "review", Provider: "openai", Model: "gpt-4o", System: "s", User: "u"}
+	changelog := KeyParams{Kind: "changelog", Provider: "openai", Model: "gpt-4o", System: "s", User: "u"}
+	if Key(review) == Key(changelog) {
+		t.Error("review and changelog cache keys must differ even with identical system+user text")
+	}
+}
+
 // TestShortKeyReturnsError guards the shard() length check: a key shorter than
 // keyShardLen must produce a clear error from Get/Put, not an
 // out-of-range panic on key[:2]. Key() never produces such a key, so this is

@@ -489,6 +489,14 @@ func (c *Config) validate() error {
 	if c.LLM.MaxTokens <= 0 {
 		return fmt.Errorf("llm.max_tokens must be > 0, got %d", c.LLM.MaxTokens)
 	}
+	// Upper bound catches a config typo (e.g. an extra zero) before it turns
+	// into a multi-hour hang: the retry loop in internal/llm sleeps up to
+	// backoffMax (10s) per attempt with no other ceiling, so an unbounded
+	// max_retries against a persistently-failing endpoint is effectively an
+	// indefinite wait escapable only via ctx cancellation (TD-4).
+	if c.LLM.MaxRetries < 0 || c.LLM.MaxRetries > 20 {
+		return fmt.Errorf("llm.max_retries must be between 0 and 20, got %d", c.LLM.MaxRetries)
+	}
 	if c.Cache.Remote.URL != "" && c.Cache.Remote.TimeoutMS <= 0 {
 		return fmt.Errorf("cache.remote.timeout_ms must be > 0 when cache.remote.url is set, got %d", c.Cache.Remote.TimeoutMS)
 	}

@@ -381,6 +381,37 @@ func TestValidateRejectsBadTimeout(t *testing.T) {
 	}
 }
 
+// TestValidateRejectsExcessiveMaxRetries guards against a config typo (e.g. an
+// extra zero) turning into a multi-hour hang: the retry loop sleeps up to
+// backoffMax per attempt with no other ceiling, so max_retries must be capped
+// at config-load time rather than silently accepted (TD-4).
+func TestValidateRejectsExcessiveMaxRetries(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "llm:\n  max_retries: 100000\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err == nil {
+		t.Error("expected error for max_retries = 100000")
+	}
+}
+
+func TestValidateRejectsNegativeMaxRetries(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "llm:\n  max_retries: -1\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err == nil {
+		t.Error("expected error for max_retries = -1")
+	}
+}
+
+func TestValidateAcceptsMaxRetriesAtUpperBound(t *testing.T) {
+	dir := t.TempDir()
+	personalPath := filepath.Join(dir, "config.yaml")
+	writeFile(t, personalPath, "llm:\n  max_retries: 20\n")
+	if _, err := Load(Options{RepoDir: dir, PersonalPath: personalPath}); err != nil {
+		t.Errorf("expected max_retries = 20 to be accepted, got error: %v", err)
+	}
+}
+
 // TestValidateRejectsBadFailOn guards against a silent misfire: an unrecognized
 // policy.fail_on value must be a loud config error, not fall through to
 // llm.RiskAtLeast's rank lookup (where an unknown threshold ranks below every
