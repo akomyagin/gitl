@@ -29,7 +29,7 @@ description: >-
   deterministic offline review — no network call, no cost.
 repository: https://github.com/akomyagin/gitl
 maintainer:
-  name: Alexander Komyagin
+  name: Aleksey Komyagin
   website: https://github.com/akomyagin/gitl
 vendor:
   name: akomyagin
